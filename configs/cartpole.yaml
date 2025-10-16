@@ -1,0 +1,22 @@
+# Sample configuration for CartPole experiment
+# CartPole実験のサンプル設定
+
+environment:
+  name: "CartPole-v1"
+  max_episode_steps: 500
+
+agent:
+  type: "random"
+  # type: "dqn"  # 将来的にDQNなどのアルゴリズムを追加
+  
+training:
+  num_episodes: 100
+  learning_rate: 0.001
+  discount_factor: 0.99
+  batch_size: 32
+  
+logging:
+  log_interval: 10
+  save_interval: 50
+  tensorboard: true
+  wandb: false
