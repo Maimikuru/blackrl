@@ -74,22 +74,25 @@ class JointPolicy:
             leader_act = self.leader_policy(obs, deterministic=deterministic_leader)
             leader_actions.append(leader_act)
 
+            # Convert to numpy arrays for get_inputs_for
+            obs_array = np.array([obs]) if not isinstance(obs, np.ndarray) else np.array([obs])
+            leader_act_array = np.array([leader_act]) if not isinstance(leader_act, np.ndarray) else np.array([leader_act])
+            
             # Construct follower observation: [observation, leader_action]
             follower_obs = self.env_spec.get_inputs_for(
                 'follower',
                 'policy',
-                obs=[obs],
-                leader_act=[leader_act],
+                obs=obs_array,
+                leader_act=leader_act_array,
             )
 
             # Get follower action
-            if isinstance(follower_obs, torch.Tensor):
-                follower_obs_np = follower_obs[0].cpu().numpy()
-            else:
-                follower_obs_np = follower_obs[0] if isinstance(follower_obs, list) else follower_obs
-
+            # follower_obs contains [observation, leader_action] concatenated
+            # But follower_policy expects (obs, leader_act) separately
+            # So we pass obs and leader_act separately
             follower_act = self.follower_policy(
-                follower_obs_np,
+                obs,
+                leader_act,
                 deterministic=deterministic_follower,
             )
             follower_actions.append(follower_act)

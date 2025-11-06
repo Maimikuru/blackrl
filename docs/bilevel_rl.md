@@ -24,7 +24,7 @@ subject to g^* ∈ argmax_g J_F(f_{θ_L}, g)
 2人マルコフゲーム環境は `blackrl.src.envs.base.Environment` を継承して実装します。
 
 ```python
-from blackrl.src.envs import Environment, GlobalEnvSpec, EnvStep, StepType
+from blackrl.envs import Environment, GlobalEnvSpec, EnvStep, StepType
 
 class MyBilevelEnv(Environment):
     def __init__(self):
@@ -68,7 +68,7 @@ class MyBilevelEnv(Environment):
 フォロワーの報酬パラメータを推定するには、`MDCEIRL`を使用します。
 
 ```python
-from blackrl.src.agents.follower import MDCEIRL
+from blackrl.agents.follower import MDCEIRL
 
 # 特徴量関数を定義
 def feature_fn(state, leader_action, follower_action):
@@ -102,7 +102,7 @@ w = mdce_irl.fit(trajectories, policy_fn_factory, leader_policy, env)
 フォロワーの最適方策を導出するには、`SoftQLearning`を使用します。
 
 ```python
-from blackrl.src.agents.follower import SoftQLearning
+from blackrl.agents.follower import SoftQLearning
 
 # 報酬関数を定義（MDCE IRLで推定されたパラメータを使用）
 def reward_fn(state, leader_action, follower_action):
@@ -141,7 +141,7 @@ for iteration in range(1000):
 完全なBi-level RLアルゴリズムは `BilevelRL` クラスで実装されています。
 
 ```python
-from blackrl.src.algos import BilevelRL
+from blackrl.algos import BilevelRL
 
 # リーダー方策を定義
 def leader_policy(observation, deterministic=False):

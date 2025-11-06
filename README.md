@@ -45,9 +45,9 @@ python scripts/train_bilevel.py
 ### 3. Pythonから直接インポート
 
 ```python
-from blackrl.src.envs import DiscreteToyEnv1_1a
-from blackrl.src.algos import BilevelRL
-from blackrl.src.agents.follower import MDCEIRL, SoftQLearning
+from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.algos import BilevelRL
+from blackrl.agents.follower import MDCEIRL, SoftQLearning
 
 # 環境の作成
 env = DiscreteToyEnv1_1a()

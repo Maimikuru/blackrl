@@ -143,12 +143,18 @@ class SoftQLearning:
         """Convert state to hashable key."""
         if isinstance(state, np.ndarray):
             return tuple(state.flatten())
+        # Handle scalar values (int, float, etc.)
+        if isinstance(state, (int, float, np.integer, np.floating)):
+            return (state,)
         return tuple(state)
 
     def _action_to_key(self, action: np.ndarray) -> Tuple:
         """Convert action to hashable key."""
         if isinstance(action, np.ndarray):
             return tuple(action.flatten())
+        # Handle scalar values (int, float, etc.)
+        if isinstance(action, (int, float, np.integer, np.floating)):
+            return (action,)
         return tuple(action)
 
     def _get_follower_actions(self):

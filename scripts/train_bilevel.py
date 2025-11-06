@@ -3,8 +3,8 @@ import numpy as np
 import torch
 from typing import Dict, List
 
-from blackrl.src.envs import DiscreteToyEnv1_1a
-from blackrl.src.algos import BilevelRL
+from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.algos import BilevelRL
 
 
 def create_simple_leader_policy(env_spec):

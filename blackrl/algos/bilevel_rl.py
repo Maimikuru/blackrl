@@ -15,9 +15,9 @@ import torch
 from typing import Callable, Optional, List, Dict
 from collections import defaultdict
 
-from blackrl.src.agents.follower.mdce_irl import MDCEIRL
-from blackrl.src.agents.follower.soft_q_learning import SoftQLearning
-from blackrl.src.policies.joint_policy import JointPolicy
+from blackrl.agents.follower.mdce_irl import MDCEIRL
+from blackrl.agents.follower.soft_q_learning import SoftQLearning
+from blackrl.policies.joint_policy import JointPolicy
 
 
 class BilevelRL:

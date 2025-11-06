@@ -1,6 +1,6 @@
 """Environment modules for bilevel RL."""
-from blackrl.src.envs.base import Environment, EnvSpec, GlobalEnvSpec, EnvStep, StepType
-from blackrl.src.envs.discrete_toy_env import (
+from blackrl.envs.base import Environment, EnvSpec, GlobalEnvSpec, EnvStep, StepType
+from blackrl.envs.discrete_toy_env import (
     DiscreteToyEnvBase,
     DiscreteToyEnv1_1a,
     DiscreteToyEnv1_1b,

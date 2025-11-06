@@ -1,5 +1,5 @@
 """Algorithm modules."""
-from blackrl.src.algos.bilevel_rl import BilevelRL
+from blackrl.algos.bilevel_rl import BilevelRL
 
 __all__ = [
     'BilevelRL',

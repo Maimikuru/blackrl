@@ -1,9 +1,9 @@
 """Example usage of Bi-level RL components."""
 import numpy as np
 
-from blackrl.src.envs import DiscreteToyEnv1_1a
-from blackrl.src.agents.follower import MDCEIRL, SoftQLearning
-from blackrl.src.policies import JointPolicy
+from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.agents.follower import MDCEIRL, SoftQLearning
+from blackrl.policies import JointPolicy
 
 
 def example_environment():

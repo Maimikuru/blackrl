@@ -1,5 +1,5 @@
 """Q-function modules."""
-from blackrl.src.q_functions.base import (
+from blackrl.q_functions.base import (
     QFunction,
     DiscreteQFunction,
     ContinuousQFunction,

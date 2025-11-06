@@ -2,7 +2,7 @@
 import abc
 from dataclasses import dataclass
 from typing import Dict, Union, Optional
-from gym.spaces import flatten_space
+from gymnasium.spaces import flatten_space
 import numpy as np
 import torch
 

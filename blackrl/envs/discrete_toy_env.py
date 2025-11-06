@@ -1,9 +1,10 @@
 """Discrete toy environments for bilevel RL."""
-import numpy as np
-from gym import spaces
-from gym.utils import seeding
 
-from blackrl.src.envs.base import (
+import numpy as np
+from gymnasium import spaces
+from gymnasium.utils import seeding
+
+from blackrl.envs.base import (
     Environment,
     GlobalEnvSpec,
     EnvStep,
@@ -18,9 +19,9 @@ class DiscreteToyEnvBase(Environment):
     2 leader actions (0, 1), and 3 follower actions (s, a, b).
     """
 
-    STATE_TYPE = ['S', 'A', 'B']  # 0, 1, 2
-    LEADER_ACT_TYPE = ['0', '1']  # 0, 1
-    FOLLOWER_ACT_TYPE = ['s', 'a', 'b']  # 0, 1, 2
+    STATE_TYPE = ["S", "A", "B"]  # 0, 1, 2
+    LEADER_ACT_TYPE = ["0", "1"]  # 0, 1
+    FOLLOWER_ACT_TYPE = ["s", "a", "b"]  # 0, 1, 2
 
     def __init__(self):
         """Initialize the discrete toy environment."""
@@ -97,7 +98,7 @@ class DiscreteToyEnvBase(Environment):
     @property
     def render_modes(self):
         """Get supported render modes."""
-        return ['human']
+        return ["human"]
 
     def transition_fn(self, state, leader_action, follower_action):
         """Compute next state from transition function.
@@ -151,9 +152,7 @@ class DiscreteToyEnvBase(Environment):
             tuple: (observation, episode_info)
         """
         if init_state is not None:
-            assert self.observation_space.contains(init_state), (
-                f"Invalid state {init_state} passed to reset"
-            )
+            assert self.observation_space.contains(init_state), f"Invalid state {init_state} passed to reset"
             self.state = int(init_state)
         else:
             self.state = 0
@@ -179,9 +178,7 @@ class DiscreteToyEnvBase(Environment):
 
         next_state = self.transition_fn(self.state, leader_action, follower_action)
         reward = self.reward_fn(self.state, leader_action, follower_action)
-        target_reward = self.target_reward_fn(
-            self.state, leader_action, follower_action
-        )
+        target_reward = self.target_reward_fn(self.state, leader_action, follower_action)
 
         self.steps_n += 1
         self.state = next_state
@@ -196,9 +193,9 @@ class DiscreteToyEnvBase(Environment):
         self.render_rewards = [target_reward, reward]
 
         env_info = {
-            'leader_action': leader_action,
-            'target_reward': target_reward,
-            'follower_reward': reward,
+            "leader_action": leader_action,
+            "target_reward": target_reward,
+            "follower_reward": reward,
         }
 
         return EnvStep(
@@ -218,7 +215,7 @@ class DiscreteToyEnvBase(Environment):
         """
         self.state = state
 
-    def render(self, mode='human'):
+    def render(self, mode="human"):
         """Render the environment.
 
         Args:
@@ -227,19 +224,19 @@ class DiscreteToyEnvBase(Environment):
         Returns:
             str: String representation of current state
         """
-        if mode != 'human':
+        if mode != "human":
             raise ValueError(f"Unsupported render mode: {mode}")
 
         if self.actions[0] is None or self.actions[1] is None:
-            print(f'Step {self.steps_n}: state={self.STATE_TYPE[self.state]}')
+            print(f"Step {self.steps_n}: state={self.STATE_TYPE[self.state]}")
         else:
             print(
-                f'leader action={self.LEADER_ACT_TYPE[self.actions[0]]}, '
-                f'follower action={self.FOLLOWER_ACT_TYPE[self.actions[1]]}, '
-                f'reward={self.render_rewards[1]}, '
-                f'target_reward={self.render_rewards[0]}'
+                f"leader action={self.LEADER_ACT_TYPE[self.actions[0]]}, "
+                f"follower action={self.FOLLOWER_ACT_TYPE[self.actions[1]]}, "
+                f"reward={self.render_rewards[1]}, "
+                f"target_reward={self.render_rewards[0]}"
             )
-            print(f'Step {self.steps_n}: state={self.STATE_TYPE[self.state]}')
+            print(f"Step {self.steps_n}: state={self.STATE_TYPE[self.state]}")
         return self.STATE_TYPE[self.state]
 
     def close(self):
@@ -442,9 +439,7 @@ class DiscreteToyEnv1_2f(DiscreteToyEnv1_2e):
     def __init__(self):
         super().__init__()
         g = 0.99  # discount rate must be 0.99
-        R = (8 * (1 + g**4) - 3 * (g**2 + g**5) - 3 * (g + g**3 + g**5)) / (
-            0.5 * (1 + g**2 + g**4) - 0.5 * (1 + g**3)
-        )
+        R = (8 * (1 + g**4) - 3 * (g**2 + g**5) - 3 * (g + g**3 + g**5)) / (0.5 * (1 + g**2 + g**4) - 0.5 * (1 + g**3))
         # R = 2.3858910707072356
         self.rewards[0, 1, 1] = R
         self._max_episode_steps = np.inf  # Infinite horizon

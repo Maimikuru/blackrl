@@ -1,6 +1,6 @@
 """Gamma-weighted replay buffer for bilevel RL."""
 import numpy as np
-from blackrl.src.replay_buffer.base import ReplayBufferBase
+from blackrl.replay_buffer.base import ReplayBufferBase
 
 
 class GammaReplayBuffer(ReplayBufferBase):
