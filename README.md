@@ -41,17 +41,52 @@ bilevel-rl（二層強化学習）
     │
     ├── config.py               <- 有用な変数と設定を格納
     │
-    ├── dataset.py              <- データをダウンロードまたは生成するスクリプト
+    ├── envs                    <- Bi-level RL環境モジュール
+    │   ├── __init__.py
+    │   └── base.py             <- 環境基底クラス（Environment, EnvSpec, GlobalEnvSpec）
     │
-    ├── features.py             <- モデリング用の特徴量を作成するコード
+    ├── agents                  <- エージェントモジュール
+    │   ├── follower
+    │   │   ├── __init__.py
+    │   │   ├── mdce_irl.py     <- MDCE IRL実装（報酬パラメータ推定）
+    │   │   └── soft_q_learning.py <- Soft Q-Learning実装（フォロワー方策導出）
+    │   └── leader              <- リーダーエージェントモジュール（将来の拡張用）
+    │       └── __init__.py
     │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- 訓練済みモデルでモデル推論を実行するコード          
-    │   └── train.py            <- モデルを訓練するコード
+    ├── algos                   <- アルゴリズムモジュール
+    │   ├── __init__.py
+    │   └── bilevel_rl.py       <- Bi-level RLアルゴリズム
+    │
+    ├── policies                <- 方策モジュール
+    │   ├── __init__.py
+    │   └── joint_policy.py     <- リーダー・フォロワー統合方策
     │
     └── plots.py                <- 可視化を作成するコード
 ```
+
+## Bi-level強化学習の実装
+
+このプロジェクトでは、Bi-level強化学習問題を解くための実装を提供しています。
+
+### 主要コンポーネント
+
+1. **環境 (envs/)**: 2人マルコフゲーム環境の基底クラス
+   - `DiscreteToyEnv*`: 離散環境のバリエーション
+2. **MDCE IRL (agents/follower/mdce_irl.py)**: フォロワーの報酬パラメータを推定
+   - デモンストレーション軌跡から直接FEVを計算
+3. **Soft Q-Learning (agents/follower/soft_q_learning.py)**: フォロワーの最適Max-Ent方策を導出
+   - 表形式Qテーブルを使用（離散環境用）
+4. **Bi-level RL (algos/bilevel_rl.py)**: リーダー・フォロワーのBi-level最適化
+   - リーダーは現在`algos/`で管理（ptiaと同様の構造）
+   - 将来の拡張用に`agents/leader/`ディレクトリを用意
+5. **Q関数 (q_functions/)**: 表形式Q関数（TabularQFunction）
+6. **Replay Buffer (replay_buffer/)**: 将来の拡張用（現在は未使用）
+
+### 注意事項
+
+- **リプレイバッファについて**: 現在の実装では、MDCE IRLとリーダーのQ関数計算はデモンストレーションデータを直接使用するため、リプレイバッファは使用していません。リプレイバッファは将来のオフポリシー学習拡張用に実装されています。
+
+詳細な使用方法は `docs/bilevel_rl.md` を参照してください。
 
 --------
 
