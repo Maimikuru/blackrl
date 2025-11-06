@@ -63,6 +63,16 @@ create_environment:
 data: requirements
 	$(PYTHON_INTERPRETER) blackrl/dataset.py
 
+## Run example usage script
+.PHONY: example
+example: requirements
+	$(PYTHON_INTERPRETER) scripts/example_usage.py
+
+## Run Bi-level RL training
+.PHONY: train
+train: requirements
+	$(PYTHON_INTERPRETER) scripts/train_bilevel.py
+
 
 #################################################################################
 # Self Documenting Commands                                                     #
