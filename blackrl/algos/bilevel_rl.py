@@ -10,9 +10,10 @@ where:
     - f_{θ_L}: Leader's policy parameterized by θ_L
     - g^*: Follower's optimal response policy
 """
+
 import numpy as np
 import torch
-from typing import Callable, Optional, List, Dict
+from typing import Callable, Optional, List, Dict, Tuple
 from collections import defaultdict
 
 from blackrl.agents.follower.mdce_irl import MDCEIRL
@@ -123,16 +124,28 @@ class BilevelRL:
         Returns:
             Estimated reward parameters w
         """
+
         # Create policy factory for MDCE IRL
         def policy_fn_factory(w):
             """Create follower policy from reward parameters w."""
+            follower_actions = self._get_follower_actions()
+            n_actions = len(follower_actions)
+            uniform_log_prob = -np.log(n_actions)
 
-            def policy_fn(state, leader_action, follower_action):
-                """Compute log probability of follower action."""
-                # This is a placeholder - in practice, this should use
-                # Soft Q-Learning to compute the policy
-                # For now, return uniform log probability
-                return -np.log(len(self._get_follower_actions()))
+            def policy_fn(state, leader_action, follower_action=None):
+                """Follower policy function.
+
+                If follower_action is None, sample an action (for compute_policy_fev).
+                Otherwise, return log probability (for compute_discounted_causal_likelihood).
+                """
+                if follower_action is None:
+                    # Sample action (for compute_policy_fev)
+                    return np.random.choice(follower_actions)
+                else:
+                    # Return log probability (for compute_discounted_causal_likelihood)
+                    # This is a placeholder - in practice, this should use
+                    # Soft Q-Learning to compute the policy
+                    return uniform_log_prob
 
             return policy_fn
 
@@ -150,7 +163,7 @@ class BilevelRL:
     def _get_follower_actions(self):
         """Get all possible follower actions."""
         action_space = self.env_spec.follower_policy_env_spec.action_space
-        if hasattr(action_space, 'n'):
+        if hasattr(action_space, "n"):
             return list(range(action_space.n))
         else:
             return [action_space.sample() for _ in range(10)]
@@ -179,13 +192,17 @@ class BilevelRL:
             return torch.dot(w, phi).item()
 
         # Initialize Soft Q-Learning
+        # Remove learning_rate from soft_q_config if present to avoid duplicate
+        soft_q_config = self.soft_q_config.copy()
+        soft_q_config.pop("learning_rate", None)
+
         self.soft_q_learning = SoftQLearning(
             env_spec=self.env_spec,
             reward_fn=reward_fn,
             leader_policy=self.leader_policy,
             discount=self.discount_follower,
             learning_rate=self.learning_rate_follower,
-            **self.soft_q_config,
+            **soft_q_config,
         )
 
         # Train Q-function
@@ -260,7 +277,7 @@ class BilevelRL:
                 env_step = env.step(leader_act, follower_act)
 
                 # Get leader reward (assuming it's in env_info)
-                leader_reward = env_step.env_info.get('leader_reward', env_step.reward)
+                leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
 
                 episode_return += discount_factor * leader_reward
                 discount_factor *= self.discount_leader
@@ -294,12 +311,16 @@ class BilevelRL:
         # Get leader action
         leader_act = self.leader_policy(observation, deterministic=deterministic)
 
+        # Convert to numpy arrays for get_inputs_for
+        obs_array = np.array([observation]) if not isinstance(observation, np.ndarray) else np.array([observation])
+        leader_act_array = np.array([leader_act]) if not isinstance(leader_act, np.ndarray) else np.array([leader_act])
+
         # Get follower action
         follower_obs = self.env_spec.get_inputs_for(
-            'follower',
-            'policy',
-            obs=[observation],
-            leader_act=[leader_act],
+            "follower",
+            "policy",
+            obs=obs_array,
+            leader_act=leader_act_array,
         )
 
         if isinstance(follower_obs, torch.Tensor):
@@ -354,10 +375,9 @@ class BilevelRL:
         # leader policy gradient updates here
         for iteration in range(n_leader_iterations):
             objective = self.compute_leader_objective(env, n_episodes=10)
-            self.stats['leader_objective'].append(objective)
+            self.stats["leader_objective"].append(objective)
 
             if verbose and iteration % 100 == 0:
                 print(f"Leader iteration {iteration}: objective={objective:.4f}")
 
         return self.stats
-
