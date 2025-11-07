@@ -1,8 +1,9 @@
 """Base Q-function classes."""
+
 import abc
+
 import numpy as np
 import torch
-from typing import Optional, Union
 
 
 class QFunction(abc.ABC):
@@ -12,12 +13,13 @@ class QFunction(abc.ABC):
     In bilevel RL, we have separate Q-functions for leader and follower.
     """
 
-    def __init__(self, env_spec, name='QFunction'):
+    def __init__(self, env_spec, name="QFunction"):
         """Initialize Q-function.
 
         Args:
             env_spec: Environment specification
             name: Name of the Q-function
+
         """
         self._env_spec = env_spec
         self._name = name
@@ -37,8 +39,8 @@ class QFunction(abc.ABC):
 
         Returns:
             Q-values for the given (observation, action) pairs
+
         """
-        pass
 
     def __call__(self, observations, actions):
         """Call forward method."""
@@ -51,12 +53,13 @@ class DiscreteQFunction(QFunction):
     This can be implemented as a table (tabular) or neural network.
     """
 
-    def __init__(self, env_spec, name='DiscreteQFunction'):
+    def __init__(self, env_spec, name="DiscreteQFunction"):
         """Initialize discrete Q-function.
 
         Args:
             env_spec: Environment specification with discrete action space
             name: Name of the Q-function
+
         """
         super().__init__(env_spec, name)
         self._action_space = env_spec.action_space
@@ -64,7 +67,7 @@ class DiscreteQFunction(QFunction):
     @property
     def num_actions(self):
         """Get number of discrete actions."""
-        if hasattr(self._action_space, 'n'):
+        if hasattr(self._action_space, "n"):
             return self._action_space.n
         raise ValueError("Action space does not have 'n' attribute")
 
@@ -80,8 +83,8 @@ class DiscreteQFunction(QFunction):
         Returns:
             If actions is provided: Q-values for the given actions
             If actions is None: Q-values for all actions (batch_size, num_actions)
+
         """
-        pass
 
 
 class ContinuousQFunction(QFunction):
@@ -90,12 +93,13 @@ class ContinuousQFunction(QFunction):
     This is typically implemented as a neural network.
     """
 
-    def __init__(self, env_spec, name='ContinuousQFunction'):
+    def __init__(self, env_spec, name="ContinuousQFunction"):
         """Initialize continuous Q-function.
 
         Args:
             env_spec: Environment specification with continuous action space
             name: Name of the Q-function
+
         """
         super().__init__(env_spec, name)
         self._action_space = env_spec.action_space
@@ -110,41 +114,42 @@ class ContinuousQFunction(QFunction):
 
         Returns:
             Q-values for the given (observation, action) pairs
+
         """
-        pass
 
 
 class TabularQFunction(DiscreteQFunction):
     """Tabular Q-function for discrete state and action spaces.
 
     This stores Q-values in a table: Q[state, action] = value
-    
+
     For bilevel RL with discrete environments, this is the primary Q-function
     implementation. It supports both leader and follower Q-functions.
     """
 
-    def __init__(self, env_spec, name='TabularQFunction', initial_value=0.0):
+    def __init__(self, env_spec, name="TabularQFunction", initial_value=0.0):
         """Initialize tabular Q-function.
 
         Args:
             env_spec: Environment specification (can be leader or follower spec)
             name: Name of the Q-function
             initial_value: Initial Q-value for all (state, action) pairs
+
         """
         super().__init__(env_spec, name)
         self._initial_value = initial_value
 
         # Initialize Q-table
         # For discrete state space
-        if hasattr(env_spec.observation_space, 'n'):
+        if hasattr(env_spec.observation_space, "n"):
             num_states = env_spec.observation_space.n
-        elif hasattr(env_spec.observation_space, 'shape'):
+        elif hasattr(env_spec.observation_space, "shape"):
             # If observation space has shape, assume it's one-hot encoded
             # The number of states is the size of the one-hot vector
             num_states = env_spec.observation_space.shape[0] if len(env_spec.observation_space.shape) > 0 else 1
         else:
             # Fallback: try to get from discrete space
-            num_states = getattr(env_spec.observation_space, 'n', 1000)
+            num_states = getattr(env_spec.observation_space, "n", 1000)
 
         num_actions = self.num_actions
         self._q_table = np.full((num_states, num_actions), initial_value, dtype=np.float32)
@@ -159,6 +164,7 @@ class TabularQFunction(DiscreteQFunction):
         Returns:
             If actions is None: Q-values for all actions (batch_size, num_actions)
             If actions provided: Q-values for specific actions (batch_size, 1)
+
         """
         # Convert observations to state indices
         if isinstance(observations, torch.Tensor):
@@ -183,23 +189,22 @@ class TabularQFunction(DiscreteQFunction):
             # Return Q-values for all actions
             q_values = self._q_table[states]  # (batch_size, num_actions)
             return torch.from_numpy(q_values).float()
+        # Return Q-values for specific actions
+        if isinstance(actions, torch.Tensor):
+            actions = actions.cpu().numpy()
+
+        # Handle action format (can be integers or one-hot)
+        if len(actions.shape) > 1 and actions.shape[-1] > 1:
+            # One-hot encoded actions
+            actions = np.argmax(actions, axis=-1).astype(int)
         else:
-            # Return Q-values for specific actions
-            if isinstance(actions, torch.Tensor):
-                actions = actions.cpu().numpy()
-            
-            # Handle action format (can be integers or one-hot)
-            if len(actions.shape) > 1 and actions.shape[-1] > 1:
-                # One-hot encoded actions
-                actions = np.argmax(actions, axis=-1).astype(int)
-            else:
-                actions = actions.flatten().astype(int)
+            actions = actions.flatten().astype(int)
 
-            # Ensure actions are within valid range
-            actions = np.clip(actions, 0, self._q_table.shape[1] - 1)
+        # Ensure actions are within valid range
+        actions = np.clip(actions, 0, self._q_table.shape[1] - 1)
 
-            q_values = self._q_table[states, actions]  # (batch_size,)
-            return torch.from_numpy(q_values).float().unsqueeze(-1)
+        q_values = self._q_table[states, actions]  # (batch_size,)
+        return torch.from_numpy(q_values).float().unsqueeze(-1)
 
     def update(self, states, actions, values):
         """Update Q-table values.
@@ -208,6 +213,7 @@ class TabularQFunction(DiscreteQFunction):
             states: State indices (can be integers or one-hot)
             actions: Action indices (can be integers or one-hot)
             values: New Q-values (can be scalar, array, or tensor)
+
         """
         # Convert to numpy arrays
         if isinstance(states, torch.Tensor):
@@ -243,6 +249,7 @@ class TabularQFunction(DiscreteQFunction):
 
         Returns:
             Copy of the Q-table array
+
         """
         return self._q_table.copy()
 
@@ -255,11 +262,12 @@ class TabularQFunction(DiscreteQFunction):
 
         Returns:
             Q-value(s) as numpy array
+
         """
         # Convert state to index
         if isinstance(state, torch.Tensor):
             state = state.cpu().numpy()
-        
+
         if isinstance(state, np.ndarray) and len(state.shape) > 0 and state.shape[-1] > 1:
             state_idx = np.argmax(state).item()
         else:
@@ -269,18 +277,17 @@ class TabularQFunction(DiscreteQFunction):
 
         if action is None:
             return self._q_table[state_idx].copy()
-        else:
-            # Convert action to index
-            if isinstance(action, torch.Tensor):
-                action = action.cpu().numpy()
-            
-            if isinstance(action, np.ndarray) and len(action.shape) > 0 and action.shape[-1] > 1:
-                action_idx = np.argmax(action).item()
-            else:
-                action_idx = int(action)
+        # Convert action to index
+        if isinstance(action, torch.Tensor):
+            action = action.cpu().numpy()
 
-            action_idx = np.clip(action_idx, 0, self._q_table.shape[1] - 1)
-            return self._q_table[state_idx, action_idx].item()
+        if isinstance(action, np.ndarray) and len(action.shape) > 0 and action.shape[-1] > 1:
+            action_idx = np.argmax(action).item()
+        else:
+            action_idx = int(action)
+
+        action_idx = np.clip(action_idx, 0, self._q_table.shape[1] - 1)
+        return self._q_table[state_idx, action_idx].item()
 
     def set_value(self, state, action, value):
         """Set Q-value for a single state-action pair.
@@ -289,11 +296,12 @@ class TabularQFunction(DiscreteQFunction):
             state: State (integer or one-hot)
             action: Action (integer or one-hot)
             value: Q-value to set
+
         """
         # Convert state to index
         if isinstance(state, torch.Tensor):
             state = state.cpu().numpy()
-        
+
         if isinstance(state, np.ndarray) and len(state.shape) > 0 and state.shape[-1] > 1:
             state_idx = np.argmax(state).item()
         else:
@@ -302,7 +310,7 @@ class TabularQFunction(DiscreteQFunction):
         # Convert action to index
         if isinstance(action, torch.Tensor):
             action = action.cpu().numpy()
-        
+
         if isinstance(action, np.ndarray) and len(action.shape) > 0 and action.shape[-1] > 1:
             action_idx = np.argmax(action).item()
         else:
@@ -313,4 +321,3 @@ class TabularQFunction(DiscreteQFunction):
         action_idx = np.clip(action_idx, 0, self._q_table.shape[1] - 1)
 
         self._q_table[state_idx, action_idx] = float(value)
-

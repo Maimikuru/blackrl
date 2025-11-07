@@ -11,14 +11,14 @@ where:
     - g^*: Follower's optimal response policy
 """
 
+from collections import defaultdict
+from collections.abc import Callable
+
 import numpy as np
 import torch
-from typing import Callable, Optional, List, Dict, Tuple
-from collections import defaultdict
 
 from blackrl.agents.follower.mdce_irl import MDCEIRL
 from blackrl.agents.follower.soft_q_learning import SoftQLearning
-from blackrl.policies.joint_policy import JointPolicy
 
 
 class BilevelRL:
@@ -40,20 +40,21 @@ class BilevelRL:
         learning_rate_follower: Learning rate for follower Q-learning
         mdce_irl_config: Configuration for MDCE IRL
         soft_q_config: Configuration for Soft Q-Learning
+
     """
 
     def __init__(
         self,
         env_spec,
         leader_policy: Callable,
-        follower_policy: Optional[Callable] = None,
-        reward_fn: Optional[Callable] = None,
+        follower_policy: Callable | None = None,
+        reward_fn: Callable | None = None,
         discount_leader: float = 0.99,
         discount_follower: float = 0.99,
         learning_rate_leader: float = 1e-3,
         learning_rate_follower: float = 1e-3,
-        mdce_irl_config: Optional[Dict] = None,
-        soft_q_config: Optional[Dict] = None,
+        mdce_irl_config: dict | None = None,
+        soft_q_config: dict | None = None,
     ):
         self.env_spec = env_spec
         self.leader_policy = leader_policy
@@ -73,7 +74,7 @@ class BilevelRL:
         )
 
         # Initialize Soft Q-Learning (will be set up after reward estimation)
-        self.soft_q_learning: Optional[SoftQLearning] = None
+        self.soft_q_learning: SoftQLearning | None = None
         self.soft_q_config = soft_q_config or {}
 
         # Statistics
@@ -89,6 +90,7 @@ class BilevelRL:
 
         Returns:
             Feature vector
+
         """
         # Concatenate state, leader_action, follower_action
         if isinstance(state, np.ndarray):
@@ -110,7 +112,7 @@ class BilevelRL:
 
     def estimate_follower_reward(
         self,
-        trajectories: List[Dict],
+        trajectories: list[dict],
         env,
         verbose: bool = True,
     ) -> torch.Tensor:
@@ -123,6 +125,7 @@ class BilevelRL:
 
         Returns:
             Estimated reward parameters w
+
         """
 
         # Create policy factory for MDCE IRL
@@ -141,11 +144,10 @@ class BilevelRL:
                 if follower_action is None:
                     # Sample action (for compute_policy_fev)
                     return np.random.choice(follower_actions)
-                else:
-                    # Return log probability (for compute_discounted_causal_likelihood)
-                    # This is a placeholder - in practice, this should use
-                    # Soft Q-Learning to compute the policy
-                    return uniform_log_prob
+                # Return log probability (for compute_discounted_causal_likelihood)
+                # This is a placeholder - in practice, this should use
+                # Soft Q-Learning to compute the policy
+                return uniform_log_prob
 
             return policy_fn
 
@@ -165,8 +167,7 @@ class BilevelRL:
         action_space = self.env_spec.follower_policy_env_spec.action_space
         if hasattr(action_space, "n"):
             return list(range(action_space.n))
-        else:
-            return [action_space.sample() for _ in range(10)]
+        return [action_space.sample() for _ in range(10)]
 
     def derive_follower_policy(
         self,
@@ -180,6 +181,7 @@ class BilevelRL:
             env: Environment instance
             n_iterations: Number of Q-learning iterations
             verbose: Whether to print progress
+
         """
         # Create reward function from estimated parameters
         w = self.mdce_irl.get_reward_params()
@@ -261,6 +263,7 @@ class BilevelRL:
 
         Returns:
             Average discounted return
+
         """
         total_returns = []
 
@@ -295,7 +298,7 @@ class BilevelRL:
         self,
         observation: np.ndarray,
         deterministic: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Get joint action from joint policy.
 
         Args:
@@ -304,6 +307,7 @@ class BilevelRL:
 
         Returns:
             Tuple of (leader_action, follower_action)
+
         """
         if self.follower_policy is None:
             raise ValueError("Follower policy not derived. Call derive_follower_policy() first.")
@@ -339,7 +343,7 @@ class BilevelRL:
     def train(
         self,
         env,
-        expert_trajectories: List[Dict],
+        expert_trajectories: list[dict],
         n_leader_iterations: int = 1000,
         n_follower_iterations: int = 1000,
         verbose: bool = True,
@@ -357,6 +361,7 @@ class BilevelRL:
             n_leader_iterations: Number of leader policy update iterations
             n_follower_iterations: Number of follower Q-learning iterations
             verbose: Whether to print progress
+
         """
         # Step 1: Estimate follower reward parameters
         if verbose:

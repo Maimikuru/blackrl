@@ -3,10 +3,11 @@
 This module implements MDCE IRL for recovering follower's reward parameters
 from observed trajectory data.
 """
+
+from collections.abc import Callable
+
 import numpy as np
 import torch
-from typing import List, Dict, Optional, Callable
-from collections import defaultdict
 
 
 class MDCEIRL:
@@ -26,6 +27,7 @@ class MDCEIRL:
         learning_rate: Learning rate for gradient ascent
         max_iterations: Maximum number of iterations
         tolerance: Convergence tolerance
+
     """
 
     def __init__(
@@ -43,11 +45,11 @@ class MDCEIRL:
         self.tolerance = tolerance
 
         # Reward parameter (to be learned)
-        self.w: Optional[torch.Tensor] = None
+        self.w: torch.Tensor | None = None
 
     def compute_expert_fev(
         self,
-        trajectories: List[Dict],
+        trajectories: list[dict],
     ) -> torch.Tensor:
         """Compute expert's discounted feature expectation value (FEV).
 
@@ -61,15 +63,16 @@ class MDCEIRL:
 
         Returns:
             Expert FEV vector of shape (K,)
+
         """
         fev = None
         total_weight = 0.0
 
         for traj in trajectories:
-            obs = traj.get('observations', [])
-            leader_acts = traj.get('leader_actions', [])
-            follower_acts = traj.get('follower_actions', [])
-            rewards = traj.get('rewards', [])
+            obs = traj.get("observations", [])
+            leader_acts = traj.get("leader_actions", [])
+            follower_acts = traj.get("follower_actions", [])
+            rewards = traj.get("rewards", [])
 
             if len(obs) == 0:
                 continue
@@ -95,14 +98,14 @@ class MDCEIRL:
                     phi_t = torch.tensor(phi_t, dtype=torch.float32)
 
                 # Discounted feature
-                discounted_phi = (self.discount ** t) * phi_t
+                discounted_phi = (self.discount**t) * phi_t
 
                 if traj_fev is None:
                     traj_fev = discounted_phi
                 else:
                     traj_fev = traj_fev + discounted_phi
 
-                weight += self.discount ** t
+                weight += self.discount**t
 
             if traj_fev is not None:
                 if fev is None:
@@ -115,7 +118,7 @@ class MDCEIRL:
         if fev is not None and total_weight > 0:
             fev = fev / total_weight
 
-        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, 'dim') else 1)
+        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
 
     def compute_policy_fev(
         self,
@@ -136,6 +139,7 @@ class MDCEIRL:
 
         Returns:
             Policy FEV vector of shape (K,)
+
         """
         fev = None
         total_weight = 0.0
@@ -161,14 +165,14 @@ class MDCEIRL:
                     phi_t = torch.tensor(phi_t, dtype=torch.float32)
 
                 # Discounted feature
-                discounted_phi = (self.discount ** t) * phi_t
+                discounted_phi = (self.discount**t) * phi_t
 
                 if traj_fev is None:
                     traj_fev = discounted_phi
                 else:
                     traj_fev = traj_fev + discounted_phi
 
-                weight += self.discount ** t
+                weight += self.discount**t
 
                 # Step environment
                 env_step = env.step(leader_act, follower_act)
@@ -190,11 +194,11 @@ class MDCEIRL:
         if fev is not None and total_weight > 0:
             fev = fev / total_weight
 
-        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, 'dim') else 1)
+        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
 
     def compute_likelihood(
         self,
-        trajectories: List[Dict],
+        trajectories: list[dict],
         policy_fn: Callable,
     ) -> float:
         """Compute discounted causal likelihood.
@@ -207,14 +211,15 @@ class MDCEIRL:
 
         Returns:
             Likelihood value
+
         """
         total_likelihood = 0.0
         total_weight = 0.0
 
         for traj in trajectories:
-            obs = traj.get('observations', [])
-            leader_acts = traj.get('leader_actions', [])
-            follower_acts = traj.get('follower_actions', [])
+            obs = traj.get("observations", [])
+            leader_acts = traj.get("leader_actions", [])
+            follower_acts = traj.get("follower_actions", [])
 
             traj_likelihood = 0.0
             weight = 0.0
@@ -230,8 +235,8 @@ class MDCEIRL:
                 # Get log probability
                 log_prob = policy_fn(s, a, b)
 
-                traj_likelihood += (self.discount ** t) * log_prob
-                weight += self.discount ** t
+                traj_likelihood += (self.discount**t) * log_prob
+                weight += self.discount**t
 
             total_likelihood += traj_likelihood
             total_weight += weight
@@ -240,7 +245,7 @@ class MDCEIRL:
 
     def fit(
         self,
-        trajectories: List[Dict],
+        trajectories: list[dict],
         policy_fn_factory: Callable,
         leader_policy: Callable,
         env,
@@ -260,11 +265,12 @@ class MDCEIRL:
 
         Returns:
             Learned reward parameter w
+
         """
         # Initialize w
         if self.w is None:
             # Initialize with small random values
-            feature_dim = self.feature_fn.dim if hasattr(self.feature_fn, 'dim') else 1
+            feature_dim = self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1
             self.w = torch.randn(feature_dim, requires_grad=True) * 0.01
 
         # Compute expert FEV
@@ -301,8 +307,7 @@ class MDCEIRL:
             if verbose and iteration % 100 == 0:
                 likelihood = self.compute_likelihood(trajectories, policy_fn)
                 print(
-                    f"Iteration {iteration}: ||gradient||={torch.norm(gradient):.6f}, "
-                    f"likelihood={likelihood:.6f}"
+                    f"Iteration {iteration}: ||gradient||={torch.norm(gradient):.6f}, likelihood={likelihood:.6f}",
                 )
 
         return self.w
@@ -312,8 +317,8 @@ class MDCEIRL:
 
         Returns:
             Reward parameter vector w
+
         """
         if self.w is None:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
         return self.w
-

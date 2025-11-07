@@ -1,8 +1,8 @@
 """Base Environment API for Bilevel RL."""
+
 import abc
 from dataclasses import dataclass
-from typing import Dict, Union, Optional
-from gymnasium.spaces import flatten_space
+
 import numpy as np
 import torch
 
@@ -10,6 +10,7 @@ import torch
 @dataclass(frozen=True)
 class StepType:
     """Step type enumeration."""
+
     FIRST = 0
     MID = 1
     TERMINAL = 2
@@ -19,8 +20,9 @@ class StepType:
 @dataclass(frozen=True)
 class InOutSpec:
     """Describes the input and output spaces of a primitive or module."""
-    input_space: 'akro.Space'  # type: ignore
-    output_space: 'akro.Space'  # type: ignore
+
+    input_space: "akro.Space"  # type: ignore
+    output_space: "akro.Space"  # type: ignore
 
 
 @dataclass(frozen=True, init=False)
@@ -31,18 +33,19 @@ class EnvSpec(InOutSpec):
         observation_space: The observation space of the env.
         action_space: The action space of the env.
         max_episode_length: The maximum number of steps allowed in an episode.
+
     """
 
     def __init__(
         self,
         observation_space,
         action_space,
-        max_episode_length: Optional[int] = None,
+        max_episode_length: int | None = None,
     ):
-        object.__setattr__(self, 'max_episode_length', max_episode_length)
+        object.__setattr__(self, "max_episode_length", max_episode_length)
         super().__init__(input_space=action_space, output_space=observation_space)
 
-    max_episode_length: Optional[int] = None
+    max_episode_length: int | None = None
 
     @property
     def action_space(self):
@@ -63,9 +66,9 @@ class GlobalEnvSpec:
     and provides utilities to construct inputs for each agent's policy/Q-function.
     """
 
-    _observation_space: 'akro.Space'  # type: ignore
-    _action_space: 'akro.Space'  # type: ignore
-    _leader_action_space: 'akro.Space'  # type: ignore
+    _observation_space: "akro.Space"  # type: ignore
+    _action_space: "akro.Space"  # type: ignore
+    _leader_action_space: "akro.Space"  # type: ignore
     _leader_policy_env_spec: EnvSpec
     _follower_policy_env_spec: EnvSpec
     _leader_qf_env_spec: EnvSpec
@@ -80,15 +83,15 @@ class GlobalEnvSpec:
         observation_space,
         action_space,
         leader_action_space,
-        max_episode_length: Optional[int] = None,
+        max_episode_length: int | None = None,
     ):
-        object.__setattr__(self, '_observation_space', observation_space)
-        object.__setattr__(self, '_action_space', action_space)
-        object.__setattr__(self, '_leader_action_space', leader_action_space)
-        object.__setattr__(self, 'max_episode_length', max_episode_length)
+        object.__setattr__(self, "_observation_space", observation_space)
+        object.__setattr__(self, "_action_space", action_space)
+        object.__setattr__(self, "_leader_action_space", leader_action_space)
+        object.__setattr__(self, "max_episode_length", max_episode_length)
         self.set_env_specs_for_agents()
 
-    max_episode_length: Optional[int] = None
+    max_episode_length: int | None = None
 
     def set_env_specs_for_agents(self):
         """Set environment specifications for leader and follower agents."""
@@ -98,8 +101,8 @@ class GlobalEnvSpec:
             action_space=self.leader_action_space,
             max_episode_length=self.max_episode_length,
         )
-        object.__setattr__(self, '_leader_policy_env_spec', l_policy_es)
-        object.__setattr__(self, '_leader_policy_obs_info', ['observation'])
+        object.__setattr__(self, "_leader_policy_env_spec", l_policy_es)
+        object.__setattr__(self, "_leader_policy_obs_info", ["observation"])
 
         # Follower policy observes: [observation, leader_action]
         # Note: This requires akro.concat, simplified here
@@ -108,8 +111,8 @@ class GlobalEnvSpec:
             action_space=self.action_space,
             max_episode_length=self.max_episode_length,
         )
-        object.__setattr__(self, '_follower_policy_env_spec', f_policy_es)
-        object.__setattr__(self, '_follower_policy_obs_info', ['observation', 'leader_action'])
+        object.__setattr__(self, "_follower_policy_env_spec", f_policy_es)
+        object.__setattr__(self, "_follower_policy_obs_info", ["observation", "leader_action"])
 
         # For Q-functions
         l_qf_es = EnvSpec(
@@ -117,16 +120,16 @@ class GlobalEnvSpec:
             action_space=self.leader_action_space,
             max_episode_length=self.max_episode_length,
         )
-        object.__setattr__(self, '_leader_qf_env_spec', l_qf_es)
-        object.__setattr__(self, '_leader_qf_obs_info', ['observation', 'follower_action'])
+        object.__setattr__(self, "_leader_qf_env_spec", l_qf_es)
+        object.__setattr__(self, "_leader_qf_obs_info", ["observation", "follower_action"])
 
         f_qf_es = EnvSpec(
             observation_space=self.observation_space,  # Simplified
             action_space=self.action_space,
             max_episode_length=self.max_episode_length,
         )
-        object.__setattr__(self, '_follower_qf_env_spec', f_qf_es)
-        object.__setattr__(self, '_follower_qf_obs_info', ['observation', 'leader_action'])
+        object.__setattr__(self, "_follower_qf_env_spec", f_qf_es)
+        object.__setattr__(self, "_follower_qf_obs_info", ["observation", "leader_action"])
 
     def get_inputs_for(
         self,
@@ -149,26 +152,19 @@ class GlobalEnvSpec:
 
         Returns:
             Concatenated input tensor
+
         """
-        assert agent in ['leader', 'follower'] and module in ['policy', 'qf']
+        assert agent in ["leader", "follower"] and module in ["policy", "qf"]
         if obs_info is None:
-            if module == 'policy':
-                obs_info = (
-                    self.leader_policy_obs_info
-                    if agent == 'leader'
-                    else self.follower_policy_obs_info
-                )
-            elif module == 'qf':
-                obs_info = (
-                    self.leader_qf_obs_info
-                    if agent == 'leader'
-                    else self.follower_qf_obs_info
-                )
+            if module == "policy":
+                obs_info = self.leader_policy_obs_info if agent == "leader" else self.follower_policy_obs_info
+            elif module == "qf":
+                obs_info = self.leader_qf_obs_info if agent == "leader" else self.follower_qf_obs_info
 
         inputs = {
-            'observation': obs,
-            'leader_action': leader_act,
-            'follower_action': follower_act,
+            "observation": obs,
+            "leader_action": leader_act,
+            "follower_action": follower_act,
         }
 
         flatten_tensors = []
@@ -260,13 +256,14 @@ class EnvStep:
         observation: Observation after applying the action.
         env_info: Environment state information.
         step_type: StepType enum value.
+
     """
 
     env_spec: EnvSpec
     action: np.ndarray
     reward: float
     observation: np.ndarray
-    env_info: Dict[str, Union[np.ndarray, dict]]
+    env_info: dict[str, np.ndarray | dict]
     step_type: StepType
 
     @property
@@ -327,6 +324,7 @@ class Environment(abc.ABC):
 
         Returns:
             tuple: (observation, episode_info)
+
         """
 
     @abc.abstractmethod
@@ -339,13 +337,13 @@ class Environment(abc.ABC):
 
         Returns:
             EnvStep: The environment step resulting from the actions.
+
         """
 
     @abc.abstractmethod
-    def render(self, mode='human'):
+    def render(self, mode="human"):
         """Render the environment."""
 
     @abc.abstractmethod
     def close(self):
         """Close the environment."""
-

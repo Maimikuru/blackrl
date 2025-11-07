@@ -1,4 +1,5 @@
 """Base replay buffer classes."""
+
 import abc
 
 
@@ -14,6 +15,7 @@ class ReplayBufferBase(abc.ABC):
 
         Args:
             size: Maximum size of the buffer
+
         """
         self._size = size
 
@@ -27,6 +29,7 @@ class ReplayBufferBase(abc.ABC):
 
         Returns:
             Dictionary of sampled transitions.
+
         """
 
     @abc.abstractmethod
@@ -35,6 +38,7 @@ class ReplayBufferBase(abc.ABC):
 
         Args:
             **kwargs: Dictionary that holds the transition data.
+
         """
 
     @abc.abstractmethod
@@ -44,6 +48,7 @@ class ReplayBufferBase(abc.ABC):
         Args:
             **kwargs: Dictionary that holds the transitions.
                 Each value should be a list of arrays.
+
         """
 
     @abc.abstractmethod
@@ -54,4 +59,3 @@ class ReplayBufferBase(abc.ABC):
     def size(self):
         """Get the maximum buffer size."""
         return self._size
-

@@ -6,8 +6,8 @@ from gymnasium.utils import seeding
 
 from blackrl.envs.base import (
     Environment,
-    GlobalEnvSpec,
     EnvStep,
+    GlobalEnvSpec,
     StepType,
 )
 
@@ -110,6 +110,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             Next state
+
         """
         next_state = self.transition[state, leader_action, follower_action].item()
         if next_state == -1:
@@ -126,6 +127,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             Reward value
+
         """
         return self.rewards[state, leader_action, follower_action].item()
 
@@ -139,6 +141,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             Target reward value
+
         """
         return self.target_rewards[state, leader_action, follower_action].item()
 
@@ -150,6 +153,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             tuple: (observation, episode_info)
+
         """
         if init_state is not None:
             assert self.observation_space.contains(init_state), f"Invalid state {init_state} passed to reset"
@@ -173,6 +177,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             EnvStep: Environment step result
+
         """
         follower_action = action
 
@@ -212,6 +217,7 @@ class DiscreteToyEnvBase(Environment):
 
         Args:
             state: State to set
+
         """
         self.state = state
 
@@ -223,6 +229,7 @@ class DiscreteToyEnvBase(Environment):
 
         Returns:
             str: String representation of current state
+
         """
         if mode != "human":
             raise ValueError(f"Unsupported render mode: {mode}")
@@ -234,28 +241,27 @@ class DiscreteToyEnvBase(Environment):
                 f"leader action={self.LEADER_ACT_TYPE[self.actions[0]]}, "
                 f"follower action={self.FOLLOWER_ACT_TYPE[self.actions[1]]}, "
                 f"reward={self.render_rewards[1]}, "
-                f"target_reward={self.render_rewards[0]}"
+                f"target_reward={self.render_rewards[0]}",
             )
             print(f"Step {self.steps_n}: state={self.STATE_TYPE[self.state]}")
         return self.STATE_TYPE[self.state]
 
     def close(self):
         """Close the environment."""
-        pass
 
     def get_opt_ag_act_array(self):
         """Get optimal follower action array.
 
         Returns:
             Array of optimal actions
+
         """
         return self.opt_ag_qtable.argmax(axis=2)
 
 
 # Environment variants (same as ptia)
 class DiscreteToyEnv1_1a(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(50, -50)
+    """leader action=0 -> best response return (follower, leader)=(50, -50)
     leader action=1 -> best response return (follower, leader)=(50, 50)
     """
 
@@ -288,8 +294,7 @@ class DiscreteToyEnv1_1a(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv1_1b(DiscreteToyEnv1_1a):
-    """
-    leader action=0 -> best response return (follower, leader)=(50, 0)
+    """leader action=0 -> best response return (follower, leader)=(50, 0)
     leader action=1 -> best response return (follower, leader)=(50, 50)
     """
 
@@ -300,8 +305,7 @@ class DiscreteToyEnv1_1b(DiscreteToyEnv1_1a):
 
 
 class DiscreteToyEnv1_2a(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(250, -50)
+    """leader action=0 -> best response return (follower, leader)=(250, -50)
     leader action=1 -> best response return (follower, leader)=(375, 75)
     """
 
@@ -346,8 +350,7 @@ class DiscreteToyEnv1_2a(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv1_2b(DiscreteToyEnv1_2a):
-    """
-    leader action=0 -> best response return (follower, leader)=(250, 0)
+    """leader action=0 -> best response return (follower, leader)=(250, 0)
     leader action=1 -> best response return (follower, leader)=(375, 75)
     """
 
@@ -358,8 +361,7 @@ class DiscreteToyEnv1_2b(DiscreteToyEnv1_2a):
 
 
 class DiscreteToyEnv1_2c(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(250, -50)
+    """leader action=0 -> best response return (follower, leader)=(250, -50)
     leader action=1 -> best response return (follower, leader)=(375, 75)
     """
 
@@ -397,8 +399,7 @@ class DiscreteToyEnv1_2c(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv1_2d(DiscreteToyEnv1_2c):
-    """
-    leader action=0 -> best response return (follower, leader)=(250, -50)
+    """leader action=0 -> best response return (follower, leader)=(250, -50)
     leader action=1 -> best response return (follower, leader)=(375, 75)
     """
 
@@ -410,8 +411,7 @@ class DiscreteToyEnv1_2d(DiscreteToyEnv1_2c):
 
 
 class DiscreteToyEnv1_2e(DiscreteToyEnv1_2c):
-    """
-    leader action=0 -> best response return (follower, leader)=(250, -50)
+    """leader action=0 -> best response return (follower, leader)=(250, -50)
     leader action=1 -> best response return (follower, leader)=(375, 75)
     """
 
@@ -425,8 +425,7 @@ class DiscreteToyEnv1_2e(DiscreteToyEnv1_2c):
 
 
 class DiscreteToyEnv1_2f(DiscreteToyEnv1_2e):
-    """
-    leader policy f(0|S)=1.0:
+    """leader policy f(0|S)=1.0:
         - best response return (follower, leader)=(1451, 195) (infinite horizon)
         - horizon=150, discount=1.0: (follower, leader)=(250, -50)
         - S->A->B->S->A->B->...
@@ -452,8 +451,7 @@ class DiscreteToyEnv1_2f(DiscreteToyEnv1_2e):
 
 
 class DiscreteToyEnv1_2g(DiscreteToyEnv1_2f):
-    """
-    leader policy f(0|S)=1.0:
+    """leader policy f(0|S)=1.0:
         - best response return (follower, leader)=(1451, 195) (infinite horizon)
         - horizon=150, discount=1.0: (follower, leader)=(250, 50)
         - S->A->B->S->A->B->...
@@ -471,8 +469,7 @@ class DiscreteToyEnv1_2g(DiscreteToyEnv1_2f):
 
 
 class DiscreteToyEnv2_1(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(150, -50)
+    """leader action=0 -> best response return (follower, leader)=(150, -50)
     leader action=1 -> best response return (follower, leader)=(150, 50)
     """
 
@@ -516,8 +513,7 @@ class DiscreteToyEnv2_1(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv2_2(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(150, 0)
+    """leader action=0 -> best response return (follower, leader)=(150, 0)
     leader action=1 -> best response return (follower, leader)=(150, 50)
     """
 
@@ -557,8 +553,7 @@ class DiscreteToyEnv2_2(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv3_1a(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=(75, -75)
+    """leader action=0 -> best response return (follower, leader)=(75, -75)
     leader action=1 -> best response return (follower, leader)=(-50, 50)
     """
 
@@ -604,8 +599,7 @@ class DiscreteToyEnv3_1a(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv3_1b(DiscreteToyEnv3_1a):
-    """
-    leader action=0 -> best response return (follower, leader)=(75, 0)
+    """leader action=0 -> best response return (follower, leader)=(75, 0)
     leader action=1 -> best response return (follower, leader)=(-50, 50)
     """
 
@@ -616,8 +610,7 @@ class DiscreteToyEnv3_1b(DiscreteToyEnv3_1a):
 
 
 class DiscreteToyEnv3_2(DiscreteToyEnvBase):
-    """
-    leader action=0 -> best response return (follower, leader)=((big_reward+1)*50, 0)
+    """leader action=0 -> best response return (follower, leader)=((big_reward+1)*50, 0)
     leader action=1 -> best response return (follower, leader)=(75, 75)
     """
 
@@ -656,8 +649,7 @@ class DiscreteToyEnv3_2(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv4_1a(DiscreteToyEnvBase):
-    """
-    optimal action=0
+    """optimal action=0
     leader action=0 -> best response return (follower, leader)=(100, 50)
     leader action=1 -> best response return (follower, leader)=(75, -75)
     """
@@ -700,8 +692,7 @@ class DiscreteToyEnv4_1a(DiscreteToyEnvBase):
 
 
 class DiscreteToyEnv4_1b(DiscreteToyEnv4_1a):
-    """
-    optimal action=0
+    """optimal action=0
     leader action=0 -> best response return (follower, leader)=(100, 50)
     leader action=1 -> best response return (follower, leader)=(75, 0)
     """

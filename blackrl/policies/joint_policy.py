@@ -1,7 +1,6 @@
 """Joint Policy for Leader and Follower."""
+
 import numpy as np
-import torch
-from typing import Dict, List, Optional, Tuple
 
 
 class JointPolicy:
@@ -14,6 +13,7 @@ class JointPolicy:
         env_spec: Global environment specification
         leader_policy: Leader's policy f_θ_L(a|s)
         follower_policy: Follower's policy g(b|s, a)
+
     """
 
     def __init__(
@@ -31,7 +31,7 @@ class JointPolicy:
         observation: np.ndarray,
         deterministic_leader: bool = False,
         deterministic_follower: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Get joint action (leader_action, follower_action).
 
         Args:
@@ -41,6 +41,7 @@ class JointPolicy:
 
         Returns:
             Tuple of (leader_action, follower_action)
+
         """
         actions, _ = self.get_actions(
             [observation],
@@ -51,10 +52,10 @@ class JointPolicy:
 
     def get_actions(
         self,
-        observations: List[np.ndarray],
+        observations: list[np.ndarray],
         deterministic_leader: bool = False,
         deterministic_follower: bool = False,
-    ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], Dict]:
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray]], dict]:
         """Get joint actions for a batch of observations.
 
         Args:
@@ -64,6 +65,7 @@ class JointPolicy:
 
         Returns:
             Tuple of (list of (leader_action, follower_action), agent_info dict)
+
         """
         leader_actions = []
         follower_actions = []
@@ -77,11 +79,11 @@ class JointPolicy:
             # Convert to numpy arrays for get_inputs_for
             obs_array = np.array([obs]) if not isinstance(obs, np.ndarray) else np.array([obs])
             leader_act_array = np.array([leader_act]) if not isinstance(leader_act, np.ndarray) else np.array([leader_act])
-            
+
             # Construct follower observation: [observation, leader_action]
             follower_obs = self.env_spec.get_inputs_for(
-                'follower',
-                'policy',
+                "follower",
+                "policy",
                 obs=obs_array,
                 leader_act=leader_act_array,
             )
@@ -98,18 +100,18 @@ class JointPolicy:
             follower_actions.append(follower_act)
 
         return (
-            list(zip(leader_actions, follower_actions)),
+            list(zip(leader_actions, follower_actions, strict=False)),
             agent_infos,
         )
 
-    def reset(self, do_resets: Optional[List[bool]] = None):
+    def reset(self, do_resets: list[bool] | None = None):
         """Reset the policy.
 
         Args:
             do_resets: Optional list of reset flags
-        """
-        if hasattr(self.leader_policy, 'reset'):
-            self.leader_policy.reset(do_resets)
-        if hasattr(self.follower_policy, 'reset'):
-            self.follower_policy.reset(do_resets)
 
+        """
+        if hasattr(self.leader_policy, "reset"):
+            self.leader_policy.reset(do_resets)
+        if hasattr(self.follower_policy, "reset"):
+            self.follower_policy.reset(do_resets)

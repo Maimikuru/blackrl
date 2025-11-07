@@ -1,5 +1,7 @@
 """Gamma-weighted replay buffer for bilevel RL."""
+
 import numpy as np
+
 from blackrl.replay_buffer.base import ReplayBufferBase
 
 
@@ -13,6 +15,7 @@ class GammaReplayBuffer(ReplayBufferBase):
     Args:
         size: Maximum number of transitions to store
         gamma: Discount factor for weighted sampling (default: 1.0)
+
     """
 
     def __init__(self, size, gamma=1.0):
@@ -21,6 +24,7 @@ class GammaReplayBuffer(ReplayBufferBase):
         Args:
             size: Maximum size of transitions in the buffer
             gamma: Discount factor for weighted sampling
+
         """
         super().__init__(size)
         self._current_size = 0
@@ -47,16 +51,17 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Returns:
             Dictionary of sampled transitions
+
         """
         if self._current_size == 0:
             raise ValueError("Buffer is empty. Cannot sample transitions.")
 
-        if discount and 'time_step' not in self._buffer.keys():
-            raise ValueError('time_step is not stored in the replay buffer.')
+        if discount and "time_step" not in self._buffer.keys():
+            raise ValueError("time_step is not stored in the replay buffer.")
 
         if discount:
             # Gamma-weighted sampling
-            probabilities = self.gamma ** self._buffer['time_step'][:self._current_size]
+            probabilities = self.gamma ** self._buffer["time_step"][: self._current_size]
             probabilities /= probabilities.sum()
             indices = np.random.choice(
                 self._current_size,
@@ -72,15 +77,13 @@ class GammaReplayBuffer(ReplayBufferBase):
                 replace=replace,
             )
 
-        sampled_transitions = {
-            key: self._buffer[key][indices] for key in self._buffer.keys()
-        }
+        sampled_transitions = {key: self._buffer[key][indices] for key in self._buffer.keys()}
 
         if with_subsequence:
             subseqs = {key: [] for key in self._buffer.keys()}
             for i in indices:
                 j = i
-                while not self._buffer['last'][j] and j != self._current_ptr:
+                while not self._buffer["last"][j] and j != self._current_ptr:
                     j = (j + 1) % self._size
                 if j < i:
                     idx_a = np.arange(i, self._size)
@@ -90,7 +93,7 @@ class GammaReplayBuffer(ReplayBufferBase):
                     idx = np.arange(i, j + 1)
                 for key in self._buffer.keys():
                     subseqs[key].append(self._buffer[key][idx])
-            sampled_transitions['subsequence'] = subseqs
+            sampled_transitions["subsequence"] = subseqs
 
         return sampled_transitions
 
@@ -100,6 +103,7 @@ class GammaReplayBuffer(ReplayBufferBase):
         Args:
             **kwargs: Dictionary that holds the transition data.
                 Each value should be a single array or scalar.
+
         """
         transition = {k: [v] for k, v in kwargs.items()}
         self.add_transitions(**transition)
@@ -110,15 +114,14 @@ class GammaReplayBuffer(ReplayBufferBase):
         Args:
             **kwargs: Dictionary that holds the transitions.
                 Each value should be a list of arrays.
+
         """
         if not self._initialized_buffer:
             self._initialize_buffer(**kwargs)
 
-        assert self._buffer.keys() == kwargs.keys(), (
-            'Keys of the buffer and transitions do not match.'
-        )
+        assert self._buffer.keys() == kwargs.keys(), "Keys of the buffer and transitions do not match."
 
-        num_transitions = len(kwargs['observation'])
+        num_transitions = len(kwargs["observation"])
         idx = self._get_storage_idx(num_transitions)
 
         for key, value in kwargs.items():
@@ -134,6 +137,7 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Args:
             **kwargs: Dictionary that holds the first transition(s)
+
         """
         for key, value in kwargs.items():
             values = np.array(value)
@@ -151,6 +155,7 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Returns:
             numpy.ndarray: The indices to store transitions at
+
         """
         if self._current_ptr + size_increment < self._size:
             idx = np.arange(self._current_ptr, self._current_ptr + size_increment)
@@ -183,6 +188,7 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Returns:
             bool: True if the buffer has reached its maximum size
+
         """
         return self._current_size == self._size
 
@@ -192,6 +198,7 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Returns:
             int: Number of transitions currently stored
+
         """
         return self._n_transitions_stored
 
@@ -201,6 +208,6 @@ class GammaReplayBuffer(ReplayBufferBase):
 
         Returns:
             int: Current number of transitions in the buffer
+
         """
         return self._current_size
-

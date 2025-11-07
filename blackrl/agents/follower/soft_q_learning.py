@@ -3,12 +3,12 @@
 This module implements Soft Q-Learning to derive the follower's optimal
 Max-Ent policy given a fixed leader policy and estimated reward function.
 """
+
+from collections import defaultdict
+from collections.abc import Callable
+
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from typing import Callable, Optional, Dict, Tuple
-from collections import defaultdict
 
 
 class SoftQLearning:
@@ -29,6 +29,7 @@ class SoftQLearning:
         learning_rate: Learning rate for Q-function updates
         temperature: Temperature parameter (default: 1.0 for Max-Ent)
         device: PyTorch device
+
     """
 
     def __init__(
@@ -39,7 +40,7 @@ class SoftQLearning:
         discount: float = 0.99,
         learning_rate: float = 1e-3,
         temperature: float = 1.0,
-        device: Optional[torch.device] = None,
+        device: torch.device | None = None,
     ):
         self.env_spec = env_spec
         self.reward_fn = reward_fn
@@ -47,10 +48,10 @@ class SoftQLearning:
         self.discount = discount
         self.learning_rate = learning_rate
         self.temperature = temperature
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Q-function network (can be replaced with tabular or neural network)
-        self.Q: Optional[Dict] = None
+        self.Q: dict | None = None
         self._initialize_q_function()
 
     def _initialize_q_function(self):
@@ -79,6 +80,7 @@ class SoftQLearning:
 
         Returns:
             Soft value V_F^soft(s, a)
+
         """
         # Get Q-values for all follower actions
         q_values = []
@@ -110,6 +112,7 @@ class SoftQLearning:
 
         Returns:
             Q-value
+
         """
         # Convert to hashable key (simplified)
         state_key = self._state_to_key(state)
@@ -132,6 +135,7 @@ class SoftQLearning:
             leader_action: Leader action a
             follower_action: Follower action b
             value: Q-value to set
+
         """
         state_key = self._state_to_key(state)
         leader_key = self._action_to_key(leader_action)
@@ -139,7 +143,7 @@ class SoftQLearning:
 
         self.Q[state_key][leader_key][follower_key] = value
 
-    def _state_to_key(self, state: np.ndarray) -> Tuple:
+    def _state_to_key(self, state: np.ndarray) -> tuple:
         """Convert state to hashable key."""
         if isinstance(state, np.ndarray):
             return tuple(state.flatten())
@@ -148,7 +152,7 @@ class SoftQLearning:
             return (state,)
         return tuple(state)
 
-    def _action_to_key(self, action: np.ndarray) -> Tuple:
+    def _action_to_key(self, action: np.ndarray) -> tuple:
         """Convert action to hashable key."""
         if isinstance(action, np.ndarray):
             return tuple(action.flatten())
@@ -162,18 +166,18 @@ class SoftQLearning:
 
         Returns:
             List of follower actions
+
         """
         # This should sample from follower action space
         # For discrete: return all actions
         # For continuous: return sampled actions
         action_space = self.env_spec.follower_policy_env_spec.action_space
-        if hasattr(action_space, 'n'):
+        if hasattr(action_space, "n"):
             # Discrete
             return list(range(action_space.n))
-        else:
-            # Continuous - sample actions
-            n_samples = 10
-            return [action_space.sample() for _ in range(n_samples)]
+        # Continuous - sample actions
+        n_samples = 10
+        return [action_space.sample() for _ in range(n_samples)]
 
     def update(
         self,
@@ -183,7 +187,7 @@ class SoftQLearning:
         reward: float,
         next_state: np.ndarray,
         done: bool,
-        learning_rate: Optional[float] = None,
+        learning_rate: float | None = None,
     ):
         """Update Q-function using Soft Q-Learning.
 
@@ -200,6 +204,7 @@ class SoftQLearning:
             next_state: Next state s_{t+1}
             done: Whether episode terminated
             learning_rate: Optional learning rate override
+
         """
         lr = learning_rate or self.learning_rate
 
@@ -235,6 +240,7 @@ class SoftQLearning:
 
         Returns:
             List of leader actions
+
         """
         # Sample from leader policy
         # For discrete: return all actions with probabilities
@@ -246,7 +252,7 @@ class SoftQLearning:
         self,
         state: np.ndarray,
         leader_action: np.ndarray,
-    ) -> Dict:
+    ) -> dict:
         """Get optimal Max-Ent policy g^*(b|s, a).
 
         g^*(b|s, a) = exp((Q_F^soft(s, a, b) - V_F^soft(s, a)) / temperature)
@@ -257,6 +263,7 @@ class SoftQLearning:
 
         Returns:
             Dictionary mapping follower actions to probabilities
+
         """
         # Compute soft value
         soft_value = self.compute_soft_value(state, leader_action)
@@ -293,6 +300,7 @@ class SoftQLearning:
 
         Returns:
             Sampled follower action b
+
         """
         policy = self.get_policy(state, leader_action)
         actions = list(policy.keys())
@@ -306,4 +314,3 @@ class SoftQLearning:
         if isinstance(sampled_action, tuple):
             return np.array(sampled_action)
         return sampled_action
-

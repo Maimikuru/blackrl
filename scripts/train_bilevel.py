@@ -1,10 +1,8 @@
 """Training script for Bi-level RL."""
-import numpy as np
-import torch
-from typing import Dict, List
 
-from blackrl.envs import DiscreteToyEnv1_1a
+import numpy as np
 from blackrl.algos import BilevelRL
+from blackrl.envs import DiscreteToyEnv1_1a
 
 
 def create_simple_leader_policy(env_spec):
@@ -15,7 +13,9 @@ def create_simple_leader_policy(env_spec):
 
     Returns:
         Leader policy function
+
     """
+
     def leader_policy(observation, deterministic=False):
         """Simple leader policy that selects action 1 at state 0, otherwise random.
 
@@ -25,6 +25,7 @@ def create_simple_leader_policy(env_spec):
 
         Returns:
             Leader action
+
         """
         if isinstance(observation, np.ndarray):
             state = int(observation.item() if observation.size == 1 else observation[0])
@@ -34,8 +35,7 @@ def create_simple_leader_policy(env_spec):
         # Simple policy: at state 0 (S), prefer action 1
         if state == 0:
             return 1 if deterministic else np.random.choice([0, 1], p=[0.3, 0.7])
-        else:
-            return np.random.randint(0, 2)
+        return np.random.randint(0, 2)
 
     return leader_policy
 
@@ -49,16 +49,17 @@ def create_demonstration_trajectories(env, n_trajectories=100):
 
     Returns:
         List of trajectory dictionaries
+
     """
     trajectories = []
 
     for _ in range(n_trajectories):
         obs, _ = env.reset()
         traj = {
-            'observations': [],
-            'leader_actions': [],
-            'follower_actions': [],
-            'rewards': [],
+            "observations": [],
+            "leader_actions": [],
+            "follower_actions": [],
+            "rewards": [],
         }
 
         # Simple expert: always choose action that leads to best reward
@@ -67,12 +68,12 @@ def create_demonstration_trajectories(env, n_trajectories=100):
             leader_act = 1  # Expert leader always chooses action 1
             follower_act = env.get_opt_ag_act_array()[leader_act, obs]
 
-            traj['observations'].append(obs)
-            traj['leader_actions'].append(leader_act)
-            traj['follower_actions'].append(follower_act)
+            traj["observations"].append(obs)
+            traj["leader_actions"].append(leader_act)
+            traj["follower_actions"].append(follower_act)
 
             env_step = env.step(leader_act, follower_act)
-            traj['rewards'].append(env_step.reward)
+            traj["rewards"].append(env_step.reward)
 
             obs = env_step.observation
 
@@ -112,6 +113,7 @@ def main():
 
         Returns:
             Feature vector
+
         """
         # Simple feature: concatenate one-hot encodings
         state_onehot = np.zeros(3)
@@ -135,13 +137,13 @@ def main():
         learning_rate_leader=1e-3,
         learning_rate_follower=1e-3,
         mdce_irl_config={
-            'learning_rate': 0.01,
-            'max_iterations': 100,
-            'tolerance': 1e-4,
+            "learning_rate": 0.01,
+            "max_iterations": 100,
+            "tolerance": 1e-4,
         },
         soft_q_config={
-            'learning_rate': 1e-2,
-            'temperature': 1.0,
+            "learning_rate": 1e-2,
+            "temperature": 1.0,
         },
     )
 
@@ -156,11 +158,10 @@ def main():
     )
 
     print("\nTraining completed!")
-    print(f"Final leader objective: {stats['leader_objective'][-1]:.4f}" if stats['leader_objective'] else "N/A")
+    print(f"Final leader objective: {stats['leader_objective'][-1]:.4f}" if stats["leader_objective"] else "N/A")
 
     return algo, stats
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     algo, stats = main()
-
