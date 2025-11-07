@@ -1,8 +1,20 @@
 """Training script for Bi-level RL."""
 
+import random
+
 import numpy as np
+import torch
 from blackrl.algos import BilevelRL
 from blackrl.envs import DiscreteToyEnv1_1a
+
+
+def set_seed(seed=42):
+    """Set random seed for reproducibility."""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def create_simple_leader_policy(env_spec):
@@ -87,10 +99,16 @@ def create_demonstration_trajectories(env, n_trajectories=100):
 
 def main():
     """Main training function."""
+    # Set random seed for reproducibility
+    seed = 42
+    set_seed(seed)
+    print(f"Random seed set to {seed}")
+
     print("Initializing Bi-level RL training...")
 
     # Create environment
     env = DiscreteToyEnv1_1a()
+    env.seed(seed)  # Set environment seed
     print(f"Environment: {env.__class__.__name__}")
 
     # Create leader policy
