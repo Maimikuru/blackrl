@@ -241,7 +241,7 @@ class BilevelRL:
 
             # Train Q-function using Soft Q-Learning
             # Use fewer iterations for each IRL step to speed up
-            n_soft_q_iterations = min(100, self.learning_rate_follower * 1000)  # Adjust as needed
+            n_soft_q_iterations = int(min(100, max(1, self.learning_rate_follower * 1000)))  # Adjust as needed
             for _ in range(n_soft_q_iterations):
                 obs, _ = env.reset()
                 while True:
@@ -1193,7 +1193,7 @@ class BilevelRL:
 
             # Add transitions to replay buffer
             if observations_list:
-                replay_buffer.add_batch(
+                replay_buffer.add_transitions(
                     observation=np.array(observations_list),
                     leader_action=np.array(leader_actions_list),
                     action=np.array(follower_actions_list),
