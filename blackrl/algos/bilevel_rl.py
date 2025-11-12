@@ -504,10 +504,15 @@ class BilevelRL:
                     print(f"MDCE IRL converged at iteration {irl_iteration}")
                 break
 
+            # Log IRL metrics
+            gradient_norm = torch.norm(gradient).item()
+            self.stats["irl_gradient_norm"].append(gradient_norm)
+
             if verbose and irl_iteration % 10 == 0:
                 likelihood = self.mdce_irl.compute_likelihood(trajectories, policy_fn)
+                self.stats["irl_likelihood"].append((irl_iteration, likelihood))
                 print(
-                    f"IRL iteration {irl_iteration}: ||gradient||={torch.norm(gradient):.6f}, likelihood={likelihood:.6f}",
+                    f"IRL iteration {irl_iteration}: ||gradient||={gradient_norm:.6f}, likelihood={likelihood:.6f}",
                 )
 
         return self.mdce_irl.w
@@ -1485,6 +1490,12 @@ class BilevelRL:
                 if verbose:
                     print("Step 4: Estimating leader's gradient...")
                 gradient_info = self._estimate_leader_gradient(replay_buffer)
+
+                # Log leader gradient metrics
+                if gradient_info:
+                    self.stats["leader_gradient_norm"].append(gradient_info.get("gradient_norm", 0.0))
+                    self.stats["leader_mean_q_value"].append(gradient_info.get("mean_q_value", 0.0))
+
                 if verbose and gradient_info:
                     print(f"  Gradient norm: {gradient_info.get('gradient_norm', 0.0):.4f}")
                     print(f"  Mean Q-value: {gradient_info.get('mean_q_value', 0.0):.4f}")

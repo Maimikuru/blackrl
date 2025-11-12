@@ -163,6 +163,31 @@ def main():
     print("\nTraining completed!")
     print(f"Final leader objective: {stats['leader_objective'][-1]:.4f}" if stats["leader_objective"] else "N/A")
 
+    # Save statistics
+    import pickle
+    from pathlib import Path
+
+    output_dir = Path("outputs")
+    output_dir.mkdir(exist_ok=True)
+
+    stats_path = output_dir / "training_stats.pkl"
+    with open(stats_path, "wb") as f:
+        pickle.dump(stats, f)
+    print(f"\nStatistics saved to: {stats_path}")
+
+    # Plot learning curves
+    try:
+        from plot_learning_curves import plot_learning_curves
+
+        plot_path = output_dir / "learning_curves.png"
+        plot_learning_curves(stats, save_path=plot_path)
+        print(f"Learning curves saved to: {plot_path}")
+
+        # Display plot (comment out if running headless)
+        # plt.show()
+    except Exception as e:
+        print(f"Warning: Could not generate plots: {e}")
+
     return algo, stats
 
 
