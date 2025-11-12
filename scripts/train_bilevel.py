@@ -137,9 +137,10 @@ def main():
         learning_rate_leader=1e-3,
         learning_rate_follower=1e-3,
         mdce_irl_config={
-            "max_iterations": 100,
+            "max_iterations": 500,
             "tolerance": 0.025,
             "n_soft_q_iterations": 100,
+            "n_monte_carlo_samples": 500,
         },
         soft_q_config={
             "learning_rate": 1e-2,

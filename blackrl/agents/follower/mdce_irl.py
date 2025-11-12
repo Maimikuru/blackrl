@@ -27,6 +27,8 @@ class MDCEIRL:
         learning_rate: Learning rate for gradient ascent
         max_iterations: Maximum number of iterations
         tolerance: Convergence tolerance
+        n_soft_q_iterations: Number of soft Q-learning iterations
+        n_monte_carlo_samples: Number of Monte Carlo samples
 
     """
 
@@ -37,6 +39,7 @@ class MDCEIRL:
         max_iterations: int = 1000,
         tolerance: float = 0.025,
         n_soft_q_iterations: int = 100,
+        n_monte_carlo_samples: int = 1000,
     ):
         self.feature_fn = feature_fn
         self.discount = discount
@@ -45,6 +48,7 @@ class MDCEIRL:
         self.n_soft_q_iterations = n_soft_q_iterations
         # Reward parameter (to be learned)
         self.w: torch.Tensor | None = None
+        self.n_monte_carlo_samples = n_monte_carlo_samples
 
     def compute_expert_fev(
         self,
@@ -123,7 +127,6 @@ class MDCEIRL:
         policy: Callable,
         leader_policy: Callable,
         env,
-        n_samples: int = 1000,
     ) -> torch.Tensor:
         """Compute policy's discounted feature expectation value (FEV).
 
@@ -133,7 +136,6 @@ class MDCEIRL:
             policy: Follower policy g(b|s, a)
             leader_policy: Leader policy f_θ_L(a|s)
             env: Environment instance
-            n_samples: Number of trajectories to sample
 
         Returns:
             Policy FEV vector of shape (K,)
@@ -142,7 +144,7 @@ class MDCEIRL:
         fev = None
         total_weight = 0.0
 
-        for _ in range(n_samples):
+        for _ in range(self.n_monte_carlo_samples):
             obs, _ = env.reset()
             traj_fev = None
             weight = 0.0

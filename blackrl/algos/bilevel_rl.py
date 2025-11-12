@@ -309,7 +309,6 @@ class BilevelRL:
                 policy_fn,
                 self.leader_policy,
                 env,
-                n_samples=100,  # Can be adjusted
             )
 
             # Step 2.4: Compare with expert FEV and update w
