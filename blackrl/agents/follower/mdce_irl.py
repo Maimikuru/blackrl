@@ -34,13 +34,11 @@ class MDCEIRL:
         self,
         feature_fn: Callable,
         discount: float = 0.99,
-        learning_rate: float = 0.01,
         max_iterations: int = 1000,
-        tolerance: float = 1e-6,
+        tolerance: float = 0.025,
     ):
         self.feature_fn = feature_fn
         self.discount = discount
-        self.learning_rate = learning_rate
         self.max_iterations = max_iterations
         self.tolerance = tolerance
 
@@ -72,7 +70,6 @@ class MDCEIRL:
             obs = traj.get("observations", [])
             leader_acts = traj.get("leader_actions", [])
             follower_acts = traj.get("follower_actions", [])
-            rewards = traj.get("rewards", [])
 
             if len(obs) == 0:
                 continue
@@ -242,75 +239,6 @@ class MDCEIRL:
             total_weight += weight
 
         return total_likelihood / total_weight if total_weight > 0 else 0.0
-
-    def fit(
-        self,
-        trajectories: list[dict],
-        policy_fn_factory: Callable,
-        leader_policy: Callable,
-        env,
-        verbose: bool = True,
-    ) -> torch.Tensor:
-        """Fit MDCE IRL to recover reward parameters.
-
-        Updates w using gradient ascent:
-            w^{k+1} <- w^k + α(k) (φ̄_expert^γ - φ̄_{g_w^k}^γ)
-
-        Args:
-            trajectories: List of expert trajectories
-            policy_fn_factory: Function that creates policy g_w from w
-            leader_policy: Leader policy f_θ_L
-            env: Environment instance
-            verbose: Whether to print progress
-
-        Returns:
-            Learned reward parameter w
-
-        """
-        # Initialize w
-        if self.w is None:
-            # Initialize with small random values
-            feature_dim = self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1
-            self.w = torch.randn(feature_dim, requires_grad=True) * 0.01
-
-        # Compute expert FEV
-        expert_fev = self.compute_expert_fev(trajectories)
-
-        if verbose:
-            print(f"Expert FEV: {expert_fev}")
-
-        # Gradient ascent
-        for iteration in range(self.max_iterations):
-            # Create policy from current w
-            policy_fn = policy_fn_factory(self.w)
-
-            # Compute policy FEV
-            policy_fev = self.compute_policy_fev(
-                policy_fn,
-                leader_policy,
-                env,
-                n_samples=100,  # Can be adjusted
-            )
-
-            # Compute gradient: ∇L(w) ∝ φ̄_expert^γ - φ̄_{g_w}^γ
-            gradient = expert_fev - policy_fev
-
-            # Update w
-            self.w = self.w + self.learning_rate * gradient
-
-            # Check convergence
-            if torch.norm(gradient) < self.tolerance:
-                if verbose:
-                    print(f"Converged at iteration {iteration}")
-                break
-
-            if verbose and iteration % 100 == 0:
-                likelihood = self.compute_likelihood(trajectories, policy_fn)
-                print(
-                    f"Iteration {iteration}: ||gradient||={torch.norm(gradient):.6f}, likelihood={likelihood:.6f}",
-                )
-
-        return self.w
 
     def get_reward_params(self) -> torch.Tensor:
         """Get learned reward parameters.
