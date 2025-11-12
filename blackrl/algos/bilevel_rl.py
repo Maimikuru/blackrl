@@ -164,6 +164,183 @@ class BilevelRL:
         # Enable tabular policy mode
         self._use_tabular_policy = True
 
+    def _compute_true_q_values(self, env, max_iterations: int = 1000, tolerance: float = 1e-6):
+        """Compute true Q-values for the follower using value iteration.
+
+        This computes Q_F^*(s, a, b) assuming the follower knows its true reward function.
+
+        Args:
+            env: Environment instance
+            max_iterations: Maximum iterations for value iteration
+            tolerance: Convergence tolerance
+
+        Returns:
+            Dictionary mapping (s, a, b) -> Q_F^*(s, a, b)
+
+        """
+        num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
+        num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+        num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
+
+        # Initialize Q-values
+        Q_true = {}
+        for s in range(num_states):
+            for a in range(num_leader_actions):
+                for b in range(num_follower_actions):
+                    Q_true[(s, a, b)] = 0.0
+
+        # Value iteration
+        for iteration in range(max_iterations):
+            Q_old = Q_true.copy()
+            max_delta = 0.0
+
+            for s in range(num_states):
+                for a in range(num_leader_actions):
+                    for b in range(num_follower_actions):
+                        # Get reward and next state from environment
+                        env.reset()
+                        env.set_state(s)  # Set state using environment method
+                        env_step = env.step(a, b)
+
+                        reward = env_step.reward
+                        next_state = env_step.observation
+
+                        if env_step.last:
+                            # Terminal state
+                            Q_true[(s, a, b)] = reward
+                        else:
+                            # Bellman update: Q(s,a,b) = r + γ * V(s')
+                            # V(s') = max_b Q(s', a', b) for any a' (we'll average over leader actions)
+                            next_state_int = int(next_state.item() if isinstance(next_state, np.ndarray) else next_state)
+
+                            # For simplicity, assume uniform leader policy for next state value
+                            v_next = 0.0
+                            for a_next in range(num_leader_actions):
+                                max_q_next = max(
+                                    [
+                                        Q_old.get((next_state_int, a_next, b_next), 0.0)
+                                        for b_next in range(num_follower_actions)
+                                    ],
+                                )
+                                v_next += max_q_next / num_leader_actions
+
+                            Q_true[(s, a, b)] = reward + self.discount_follower * v_next
+
+                        # Track convergence
+                        delta = abs(Q_true[(s, a, b)] - Q_old.get((s, a, b), 0.0))
+                        max_delta = max(max_delta, delta)
+
+            if max_delta < tolerance:
+                print(f"True Q-values converged in {iteration + 1} iterations")
+                break
+
+        return Q_true
+
+    def _display_follower_q_values(self, env=None, show_true_q: bool = True):
+        """Display follower's learned Q-values in a readable format.
+
+        Args:
+            env: Environment instance (optional, for computing true Q-values)
+            show_true_q: Whether to compute and show true optimal Q-values
+
+        """
+        if self.soft_q_learning is None or self.soft_q_learning.Q is None:
+            print("Follower Q-values not available (not initialized)")
+            return
+
+        Q = self.soft_q_learning.Q
+
+        # Get dimensions from env_spec
+        num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
+        num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+        num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
+
+        # Compute true Q-values if requested
+        Q_true = None
+        if show_true_q and env is not None:
+            print("\nComputing true optimal Q-values...")
+            Q_true = self._compute_true_q_values(env)
+            print()
+
+        print("\nFollower Q-Function: Q_F(s, a, b)")
+        if Q_true:
+            print("Format: Learned | True | Error")
+        print("-" * 80)
+
+        for s in range(num_states):
+            print(f"\nState {s}:")
+            for a in range(num_leader_actions):
+                # Access Q-values using correct keys (must match how they were stored)
+                if Q_true:
+                    # Show learned, true, and error
+                    q_comp_strs = []
+                    for b in range(num_follower_actions):
+                        q_learned = self.soft_q_learning.get_q_value(s, a, b)
+                        q_true_val = Q_true[(s, a, b)]
+                        error = abs(q_learned - q_true_val)
+                        q_comp_strs.append(f"b={b}: {q_learned:6.3f} | {q_true_val:6.3f} | ε={error:6.3f}")
+                    print(f"  Leader action {a}:")
+                    for comp_str in q_comp_strs:
+                        print(f"    {comp_str}")
+                else:
+                    # Show only learned Q-values
+                    q_values_str = "  ".join(
+                        [
+                            f"Q({s},{a},{b})={self.soft_q_learning.get_q_value(s, a, b):7.4f}"
+                            for b in range(num_follower_actions)
+                        ],
+                    )
+                    print(f"  Leader action {a}: {q_values_str}")
+
+                # Also show soft value V_F^soft(s, a)
+                v_soft = self.soft_q_learning.compute_soft_value(s, a)
+                print(f"    V_F^soft({s},{a}) = {v_soft:7.4f}")
+
+                # Show follower policy probabilities
+                probs = []
+                for b in range(num_follower_actions):
+                    q_val = self.soft_q_learning.get_q_value(s, a, b)
+                    prob = np.exp((q_val - v_soft) / self.soft_q_learning.temperature)
+                    probs.append(prob)
+                probs_str = "  ".join([f"π_F({b}|{s},{a})={p:.4f}" for b, p in enumerate(probs)])
+                print(f"    Follower policy: {probs_str}")
+
+        # Show Q-value statistics
+        # Extract all Q-values from nested defaultdict structure: Q[s][a][b]
+        q_values = []
+        q_true_values = []
+        errors = []
+
+        for s in range(num_states):
+            for a in range(num_leader_actions):
+                for b in range(num_follower_actions):
+                    q_learned = self.soft_q_learning.get_q_value(s, a, b)
+                    q_values.append(q_learned)
+
+                    if Q_true:
+                        q_true_val = Q_true[(s, a, b)]
+                        q_true_values.append(q_true_val)
+                        errors.append(abs(q_learned - q_true_val))
+
+        if q_values:
+            print("\nQ-value Statistics (Learned):")
+            print(f"  Min: {min(q_values):7.4f}")
+            print(f"  Max: {max(q_values):7.4f}")
+            print(f"  Mean: {np.mean(q_values):7.4f}")
+            print(f"  Std: {np.std(q_values):7.4f}")
+
+        if Q_true and q_true_values:
+            print("\nQ-value Statistics (True Optimal):")
+            print(f"  Min: {min(q_true_values):7.4f}")
+            print(f"  Max: {max(q_true_values):7.4f}")
+            print(f"  Mean: {np.mean(q_true_values):7.4f}")
+            print(f"  Std: {np.std(q_true_values):7.4f}")
+
+            print("\nApproximation Error:")
+            print(f"  Mean Absolute Error: {np.mean(errors):7.4f}")
+            print(f"  Max Error: {max(errors):7.4f}")
+            print(f"  RMSE: {np.sqrt(np.mean([e**2 for e in errors])):7.4f}")
+
     def estimate_follower_reward(
         self,
         trajectories: list[dict],
@@ -260,17 +437,17 @@ class BilevelRL:
 
                     # Step environment
                     env_step = env.step(leader_act, follower_act)
-                    reward = env_step.reward
-                    # # Use estimated reward function (not environment reward!)
-                    # # r_F(s, a, b) = w^T φ(s, a, b)
-                    # reward = reward_fn(obs, leader_act, follower_act)
 
-                    # Update Q-function
+                    # CRITICAL: Use estimated reward function (not environment reward!)
+                    # In MDCE IRL, we reconstruct Q_F using r_F(s, a, b) = w^T φ(s, a, b)
+                    reward = reward_fn(obs, leader_act, follower_act)
+
+                    # Update Q-function with estimated reward
                     temp_soft_q_learning.update(
                         obs,
                         leader_act,
                         follower_act,
-                        reward,
+                        reward,  # Estimated reward from w^T φ
                         env_step.observation,
                         env_step.last,
                     )
@@ -315,9 +492,10 @@ class BilevelRL:
             # Compute gradient: ∇L(w) ∝ φ̄_expert^γ - φ̄_{g_w}^γ
             gradient = expert_fev - policy_fev
 
-            # Update w: w^n ← w^n + δ(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
-            # Compute learning rate schedule: α(n) = 1000 / (1000 + sqrt(n + 2))
-            learning_rate_schedule = self.mdce_irl.max_iterations / (self.mdce_irl.max_iterations + np.sqrt(irl_iteration + 2))
+            # Update w: w^n ← w^n + α(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
+            # Learning rate schedule: α(n) = 0.1 / (1.0 + n)
+            # More conservative: n=0→0.1, n=9→0.01, n=99→0.001
+            learning_rate_schedule = 0.1 / (1.0 + irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + learning_rate_schedule * gradient
 
             # Step 2.5: Check convergence
@@ -339,7 +517,7 @@ class BilevelRL:
         action_space = self.env_spec.follower_policy_env_spec.action_space
         if hasattr(action_space, "n"):
             return list(range(action_space.n))
-        return [action_space.sample() for _ in range(10)]
+            return [action_space.sample() for _ in range(10)]
 
     def _get_follower_action_probs(self, state, leader_action):
         """Get follower action probabilities g_{w^n}(b|s, a) for given state and leader action.
@@ -1055,22 +1233,17 @@ class BilevelRL:
                     print("Step 0 (First iteration): Deriving initial follower policy using true rewards...")
 
                 # Follower learns Q_F using Soft Q-Learning with true rewards from environment
-                # We need to set up a reward function that returns the true follower reward
-                def true_follower_reward_fn(state, leader_action, follower_action):
-                    """Return true follower reward from environment (not estimated)."""
-                    # For the toy environment, we can access the true reward
-                    # In practice, the follower observes r_F directly from environment interactions
-                    # This is a placeholder - the actual reward is obtained during environment steps
-                    return 0.0  # Placeholder, actual rewards come from env.step()
+                # The actual rewards are obtained from env.step() and passed directly to update()
+                # No reward_fn needed here
 
-                # Initialize Soft Q-Learning with placeholder reward function
-                # The actual learning happens through environment interactions in derive_follower_policy
+                # Initialize Soft Q-Learning
+                # The actual learning happens through environment interactions
                 soft_q_config = self.soft_q_config.copy()
                 soft_q_config.pop("learning_rate", None)
 
                 self.soft_q_learning = SoftQLearning(
                     env_spec=self.env_spec,
-                    reward_fn=true_follower_reward_fn,  # Placeholder
+                    reward_fn=None,  # Not needed: rewards come from env.step()
                     leader_policy=self.leader_policy,
                     discount=self.discount_follower,
                     learning_rate=self.learning_rate_follower,
@@ -1086,8 +1259,12 @@ class BilevelRL:
                     print("Step 0: Learning follower policy with true rewards from environment...")
                 # Follower learns by interacting with environment
                 # The rewards are obtained directly from env.step() calls
-                for _ in range(n_follower_iterations):
+                total_steps = 0
+                total_reward = 0.0
+                for episode_idx in range(n_follower_iterations):
                     obs, _ = env.reset()
+                    episode_steps = 0
+                    episode_reward = 0.0
                     while True:
                         # Sample leader action
                         if self._use_tabular_policy and self.leader_policy_table is not None:
@@ -1114,9 +1291,33 @@ class BilevelRL:
                             env_step.last,
                         )
 
+                        episode_steps += 1
+                        episode_reward += true_follower_reward
                         obs = env_step.observation
                         if env_step.last:
                             break
+
+                    total_steps += episode_steps
+                    total_reward += episode_reward
+                    if verbose and episode_idx < 3:  # Print first 3 episodes
+                        print(f"  Episode {episode_idx}: {episode_steps} steps, total reward = {episode_reward:.4f}")
+
+                if verbose:
+                    print("\nStep 0 Summary:")
+                    print(f"  Total episodes: {n_follower_iterations}")
+                    print(f"  Total steps: {total_steps}")
+                    print(f"  Average steps per episode: {total_steps / n_follower_iterations:.2f}")
+                    print(f"  Total reward: {total_reward:.4f}")
+                    print(f"  Average reward per episode: {total_reward / n_follower_iterations:.4f}\n")
+
+                # Display learned Q-values for verification
+                if verbose:
+                    print("\n" + "=" * 80)
+                    print("FOLLOWER Q-VALUES AFTER STEP 0 (First Iteration)")
+                    print("=" * 80)
+                    self._display_follower_q_values(env=env, show_true_q=True)
+                    print("=" * 80 + "\n")
+
             else:
                 # Subsequent iterations: Follower re-learns its policy using true rewards
                 # Note: リーダーの方策が更新されたため、フォロワーも再学習が必要
@@ -1154,6 +1355,14 @@ class BilevelRL:
                         obs = env_step.observation
                         if env_step.last:
                             break
+
+                # Display learned Q-values for verification
+                if verbose:
+                    print("\n" + "=" * 80)
+                    print(f"FOLLOWER Q-VALUES AFTER STEP 0 (Iteration {iteration})")
+                    print("=" * 80)
+                    self._display_follower_q_values(env=env, show_true_q=True)
+                    print("=" * 80 + "\n")
 
             # Step 1: Collect trajectories
             if verbose:

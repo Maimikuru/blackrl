@@ -35,15 +35,15 @@ class SoftQLearning:
     def __init__(
         self,
         env_spec,
-        reward_fn: Callable,
-        leader_policy: Callable,
+        reward_fn: Callable | None = None,
+        leader_policy: Callable | None = None,
         discount: float = 0.99,
         learning_rate: float = 1e-3,
         temperature: float = 1.0,
         device: torch.device | None = None,
     ):
         self.env_spec = env_spec
-        self.reward_fn = reward_fn
+        self.reward_fn = reward_fn  # Optional: only used if computing rewards internally
         self.leader_policy = leader_policy
         self.discount = discount
         self.learning_rate = learning_rate
@@ -245,6 +245,13 @@ class SoftQLearning:
         # Sample from leader policy
         # For discrete: return all actions with probabilities
         # For continuous: sample multiple actions
+        if self.leader_policy is None:
+            # If no leader policy, return all possible actions
+            if hasattr(self.env_spec, 'leader_action_space') and hasattr(self.env_spec.leader_action_space, 'n'):
+                return list(range(self.env_spec.leader_action_space.n))
+            # Fallback: assume binary actions
+            return [0, 1]
+
         n_samples = 5
         return [self.leader_policy(state) for _ in range(n_samples)]
 

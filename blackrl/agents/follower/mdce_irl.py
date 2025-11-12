@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
+from joblib import Parallel, delayed
 
 
 class MDCEIRL:
@@ -29,6 +30,7 @@ class MDCEIRL:
         tolerance: Convergence tolerance
         n_soft_q_iterations: Number of soft Q-learning iterations
         n_monte_carlo_samples: Number of Monte Carlo samples
+        n_jobs: Number of parallel jobs for Monte Carlo sampling (-1 for all CPUs)
 
     """
 
@@ -40,15 +42,17 @@ class MDCEIRL:
         tolerance: float = 0.025,
         n_soft_q_iterations: int = 100,
         n_monte_carlo_samples: int = 1000,
+        n_jobs: int = -1,
     ):
         self.feature_fn = feature_fn
         self.discount = discount
         self.max_iterations = max_iterations
         self.tolerance = tolerance
         self.n_soft_q_iterations = n_soft_q_iterations
+        self.n_monte_carlo_samples = n_monte_carlo_samples
+        self.n_jobs = n_jobs
         # Reward parameter (to be learned)
         self.w: torch.Tensor | None = None
-        self.n_monte_carlo_samples = n_monte_carlo_samples
 
     def compute_expert_fev(
         self,
@@ -122,11 +126,69 @@ class MDCEIRL:
 
         return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
 
+    def _sample_trajectory_fev(
+        self,
+        policy: Callable,
+        leader_policy: Callable,
+        env,
+    ) -> tuple[torch.Tensor | None, float]:
+        """Sample a single trajectory and compute its FEV.
+
+        Args:
+            policy: Follower policy g(b|s, a)
+            leader_policy: Leader policy f_θ_L(a|s)
+            env: Environment instance
+
+        Returns:
+            Tuple of (trajectory_fev, weight)
+
+        """
+        obs, _ = env.reset()
+        traj_fev = None
+        weight = 0.0
+        t = 0
+
+        while True:
+            # Sample leader action
+            leader_act = leader_policy(obs)
+
+            # Sample follower action from policy
+            follower_act = policy(obs, leader_act)
+
+            # Compute feature vector
+            phi_t = self.feature_fn(obs, leader_act, follower_act)
+            if isinstance(phi_t, np.ndarray):
+                phi_t = torch.from_numpy(phi_t).float()
+            elif not isinstance(phi_t, torch.Tensor):
+                phi_t = torch.tensor(phi_t, dtype=torch.float32)
+
+            # Discounted feature
+            discounted_phi = (self.discount**t) * phi_t
+
+            if traj_fev is None:
+                traj_fev = discounted_phi
+            else:
+                traj_fev = traj_fev + discounted_phi
+
+            weight += self.discount**t
+
+            # Step environment
+            env_step = env.step(leader_act, follower_act)
+            obs = env_step.observation
+
+            t += 1
+
+            if env_step.last or t >= env.spec.max_episode_length:
+                break
+
+        return traj_fev, weight
+
     def compute_policy_fev(
         self,
         policy: Callable,
         leader_policy: Callable,
         env,
+        n_jobs: int | None = None,
     ) -> torch.Tensor:
         """Compute policy's discounted feature expectation value (FEV).
 
@@ -136,53 +198,25 @@ class MDCEIRL:
             policy: Follower policy g(b|s, a)
             leader_policy: Leader policy f_θ_L(a|s)
             env: Environment instance
+            n_jobs: Number of parallel jobs (-1 for all CPUs, 1 for sequential, None uses self.n_jobs)
 
         Returns:
             Policy FEV vector of shape (K,)
 
         """
+        if n_jobs is None:
+            n_jobs = self.n_jobs
+
+        # Parallel sampling of trajectories
+        results = Parallel(n_jobs=n_jobs, backend="loky")(
+            delayed(self._sample_trajectory_fev)(policy, leader_policy, env) for _ in range(self.n_monte_carlo_samples)
+        )
+
+        # Aggregate results
         fev = None
         total_weight = 0.0
 
-        for _ in range(self.n_monte_carlo_samples):
-            obs, _ = env.reset()
-            traj_fev = None
-            weight = 0.0
-            t = 0
-
-            while True:
-                # Sample leader action
-                leader_act = leader_policy(obs)
-
-                # Sample follower action from policy
-                follower_act = policy(obs, leader_act)
-
-                # Compute feature vector
-                phi_t = self.feature_fn(obs, leader_act, follower_act)
-                if isinstance(phi_t, np.ndarray):
-                    phi_t = torch.from_numpy(phi_t).float()
-                elif not isinstance(phi_t, torch.Tensor):
-                    phi_t = torch.tensor(phi_t, dtype=torch.float32)
-
-                # Discounted feature
-                discounted_phi = (self.discount**t) * phi_t
-
-                if traj_fev is None:
-                    traj_fev = discounted_phi
-                else:
-                    traj_fev = traj_fev + discounted_phi
-
-                weight += self.discount**t
-
-                # Step environment
-                env_step = env.step(leader_act, follower_act)
-                obs = env_step.observation
-
-                t += 1
-
-                if env_step.last or t >= env.spec.max_episode_length:
-                    break
-
+        for traj_fev, weight in results:
             if traj_fev is not None:
                 if fev is None:
                     fev = traj_fev

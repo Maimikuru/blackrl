@@ -132,18 +132,20 @@ def main():
     algo = BilevelRL(
         env_spec=env.spec,
         leader_policy=leader_policy,
+        reward_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
         discount_follower=0.99,
-        learning_rate_leader=1e-3,
-        learning_rate_follower=1e-3,
+        learning_rate_leader=0.01,  # Increase from 1e-3 to 0.01 for faster Q-learning
+        learning_rate_follower=0.1,  # Increase from 1e-3 to 0.1 for faster Q-learning
         mdce_irl_config={
             "max_iterations": 500,
             "tolerance": 0.025,
-            "n_soft_q_iterations": 100,
-            "n_monte_carlo_samples": 500,
+            "n_soft_q_iterations": 1000,  # Increase to 1000 for better Q-function convergence
+            "n_monte_carlo_samples": 500,  # Increase to 2000 for better FEV estimation
+            "n_jobs": -1,  # Use all CPU cores for parallel Monte Carlo sampling
         },
         soft_q_config={
-            "learning_rate": 1e-2,
+            "learning_rate": 0.1,  # Increase from 1e-2 to 0.1
             "temperature": 1.0,
         },
     )
@@ -154,7 +156,7 @@ def main():
         env=env,
         expert_trajectories=trajectories,
         n_leader_iterations=100,
-        n_follower_iterations=500,
+        n_follower_iterations=2000,  # Increase from 500 to 2000 for better Q-value convergence
         verbose=True,
     )
 
