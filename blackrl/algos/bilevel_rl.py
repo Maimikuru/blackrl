@@ -241,7 +241,9 @@ class BilevelRL:
 
             # Train Q-function using Soft Q-Learning
             # Use fewer iterations for each IRL step to speed up
-            n_soft_q_iterations = int(min(100, max(1, self.learning_rate_follower * 1000)))  # Adjust as needed
+            # n_soft_q_iterations = int(min(100, max(1, self.learning_rate_follower * 1000)))
+            n_soft_q_iterations = self.mdce_irl.n_soft_q_iterations
+            # Adjust as needed
             for _ in range(n_soft_q_iterations):
                 obs, _ = env.reset()
                 while True:
@@ -259,6 +261,9 @@ class BilevelRL:
                     # Step environment
                     env_step = env.step(leader_act, follower_act)
                     reward = env_step.reward
+                    # # Use estimated reward function (not environment reward!)
+                    # # r_F(s, a, b) = w^T φ(s, a, b)
+                    # reward = reward_fn(obs, leader_act, follower_act)
 
                     # Update Q-function
                     temp_soft_q_learning.update(
@@ -312,7 +317,9 @@ class BilevelRL:
             gradient = expert_fev - policy_fev
 
             # Update w: w^n ← w^n + δ(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
-            self.mdce_irl.w = self.mdce_irl.w + self.mdce_irl.learning_rate * gradient
+            # Compute learning rate schedule: α(n) = 1000 / (1000 + sqrt(n + 2))
+            learning_rate_schedule = self.mdce_irl.max_iterations / (self.mdce_irl.max_iterations + np.sqrt(irl_iteration + 2))
+            self.mdce_irl.w = self.mdce_irl.w + learning_rate_schedule * gradient
 
             # Step 2.5: Check convergence
             if torch.norm(gradient) < self.mdce_irl.tolerance:
@@ -786,12 +793,12 @@ class BilevelRL:
     def _estimate_leader_gradient(self, replay_buffer, batch_size: int = 64):
         """Estimate leader's policy gradient using Equation 5.20.
 
-        Implements the full gradient formula:
-        ∇_{θ_L} J_L(θ_L) = \frac{1}{1-γ_L} \\mathbb{E}_{d_{γ_L}}^{f_{θ_L}, g_{θ_L}^*} \\Biggl[
-            & \nabla_{θ_L} \\log f_{θ_L}(a|s) Q_L^{f_{θ_L}, g_{θ_L}^*}(s, a, b) \\
-            & + \frac{1}{\beta_F(1-\\gamma_F)} \\left( Q_L^{f_{θ_L}, g_{θ_L}^*}(s, a, b) - \\mathbb{E}_{b \\sim g_{θ_L}^*(\\cdot|s,a)}[Q_L^{f_{θ_L}, g_{θ_L}^*}(s, a, b)] \right) \\
-            & \\cdot \\mathbb{E}_{d_{γ_F}}^{f_{θ_L}, g_{θ_L}^*} \\left[ \nabla_{θ_L} \\log f_{θ_L}(\\dot{a}|\\dot{s}) V_F^{f_{θ_L}\\dag}(\\dot{s}, \\dot{a}) \\Big| s, a, b \right]
-        \\Biggr]
+        Implements the full gradient formula (Equation 5.20):
+        ∇_{θ_L} J_L(θ_L) = [1/(1-γ_L)] E_{d_{γ_L}} [
+            ∇_{θ_L} log f_{θ_L}(a|s) Q_L(s, a, b)
+            + [1/(β_F(1-γ_F))] (Q_L(s,a,b) - E_{b~g}[Q_L(s,a,b)])
+            * E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ,ȧ) | s,a,b ]
+        ]
 
         For tabular policy π_L[s, a], we approximate this as:
         ∇_{π_L[s, a]} J_L ≈ E[Q_L(s, a, b) | s, a] / (1 - γ_L)
@@ -808,17 +815,18 @@ class BilevelRL:
         if self.leader_q_table is None or not self._use_tabular_policy or self.leader_policy_table is None:
             return {"gradient_norm": 0.0, "estimated_gradient": None, "policy_gradients": None}
 
-        # Sample batch
+        # Sample batch with subsequences for computing conditional expectation
         samples = replay_buffer.sample_transitions(
             batch_size=batch_size,
             replace=True,
             discount=False,
-            with_subsequence=False,
+            with_subsequence=True,  # Need subsequences for Equation 5.20
         )
 
         obs = samples["observation"]
         leader_acts = samples["leader_action"]
         follower_acts = samples["action"]
+        subsequences = samples["subsequence"]
 
         # Convert to numpy arrays if needed
         if isinstance(obs, torch.Tensor):
@@ -842,8 +850,8 @@ class BilevelRL:
         first_term_gradients = np.zeros_like(self.leader_policy_table)
 
         # Second term: Follower influence term
-        # \frac{1}{\beta_F(1-\gamma_F)} \left( Q_L(s, a, b) - \mathbb{E}_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)] \right)
-        # \cdot \mathbb{E}_{d_{γ_F}}^{f_{θ_L}, g_{θ_L}^*} \left[ \nabla_{θ_L} \log f_{θ_L}(\dot{a}|\dot{s}) V_F^{f_{θ_L}\dag}(\dot{s}, \dot{a}) \Big| s, a, b \right]
+        # [1/(β_F(1-γ_F))] * (Q_L(s,a,b) - E_{b~g}[Q_L(s,a,b)])
+        # * E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ,ȧ) | s,a,b ]
         second_term_gradients = np.zeros_like(self.leader_policy_table)
 
         # Get β_F (temperature parameter from Soft Q-Learning)
@@ -855,7 +863,6 @@ class BilevelRL:
         for i in range(len(obs)):
             state = obs[i]
             action = leader_acts[i]
-            follower_action = follower_acts[i]
             q_val = q_values[i]
 
             # First term: Standard policy gradient
@@ -873,20 +880,47 @@ class BilevelRL:
             # Benefit: Q_L(s, a, b) - E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
             benefit = q_val - expected_q_follower
 
-            # Influence: E_{d_{γ_F}}^{f_{θ_L}, g_{θ_L}^*} \left[ \nabla_{θ_L} \log f_{θ_L}(\dot{a}|\dot{s}) V_F^{f_{θ_L}\dag}(\dot{s}, \dot{a}) \Big| s, a, b \right]
-            # This is approximated using the follower's soft value function V_F^soft
-            # For simplicity, we use V_F^soft(s, a) from Soft Q-Learning
-            if self.soft_q_learning is not None:
-                v_f_soft = self.soft_q_learning.compute_soft_value(state, action)
-                # Influence term: ∇_{θ_L} log f_{θ_L}(a|s) * V_F^soft(s, a)
-                # For tabular policy, this is V_F^soft(s, a) / π_L(a|s)
-                influence = v_f_soft
-            else:
-                influence = 0.0
+            # Influence: E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ, ȧ) | s, a, b ]
+            # This is computed using the subsequence starting from (s, a, b)
+            influence_gradients = np.zeros_like(self.leader_policy_table)
+
+            if self.soft_q_learning is not None and subsequences is not None:
+                # Get subsequence for this sample
+                subseq_obs = subsequences["observation"][i]
+                subseq_leader_acts = subsequences["leader_action"][i]
+
+                # Convert to numpy arrays if needed
+                if isinstance(subseq_obs, torch.Tensor):
+                    subseq_obs = subseq_obs.cpu().numpy()
+                if isinstance(subseq_leader_acts, torch.Tensor):
+                    subseq_leader_acts = subseq_leader_acts.cpu().numpy()
+
+                subseq_obs = subseq_obs.flatten().astype(int)
+                subseq_leader_acts = subseq_leader_acts.flatten().astype(int)
+
+                # Compute conditional expectation over subsequence
+                # E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F^soft(ṡ, ȧ) | s, a, b ]
+                for t, (s_dot, a_dot) in enumerate(zip(subseq_obs, subseq_leader_acts, strict=True)):
+                    # Compute V_F^soft(ṡ, ȧ)
+                    v_f_soft = self.soft_q_learning.compute_soft_value(s_dot, a_dot)
+
+                    # For tabular policy: ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) is 1/π_L(ȧ|ṡ)
+                    # So gradient w.r.t. π_L[ṡ, ȧ] is: V_F^soft(ṡ, ȧ) / π_L(ȧ|ṡ)
+                    # We accumulate V_F^soft(ṡ, ȧ) and normalize later
+
+                    # Discount by γ_F^t
+                    discount_factor = self.discount_follower**t
+                    influence_gradients[s_dot, a_dot] += discount_factor * v_f_soft
+
+                # Normalize by (1 - γ_F) for discounted state distribution expectation
+                # This is part of the d_{γ_F} normalization
+                if len(subseq_obs) > 0:
+                    influence_gradients = influence_gradients / (1.0 - self.discount_follower)
 
             # Second term contribution
-            second_term_contribution = benefit * influence / (beta_F * (1.0 - self.discount_follower))
-            second_term_gradients[state, action] += second_term_contribution
+            # benefit * influence_gradients / β_F
+            # Note: We already divided by (1-γ_F) in influence_gradients computation
+            second_term_gradients += benefit * influence_gradients / beta_F
 
         # Normalize by number of samples per (state, action)
         state_action_counts = np.zeros_like(self.leader_policy_table)
@@ -1138,7 +1172,7 @@ class BilevelRL:
             # Store trajectories for MDCE IRL (episode format)
             trajectories_for_irl = []
 
-            for episode in range(n_episodes_per_iteration):
+            for _ in range(n_episodes_per_iteration):
                 obs, _ = env.reset()
                 time_step = 0
 

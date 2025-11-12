@@ -36,12 +36,13 @@ class MDCEIRL:
         discount: float = 0.99,
         max_iterations: int = 1000,
         tolerance: float = 0.025,
+        n_soft_q_iterations: int = 100,
     ):
         self.feature_fn = feature_fn
         self.discount = discount
         self.max_iterations = max_iterations
         self.tolerance = tolerance
-
+        self.n_soft_q_iterations = n_soft_q_iterations
         # Reward parameter (to be learned)
         self.w: torch.Tensor | None = None
 
