@@ -30,20 +30,20 @@ def plot_learning_curves(stats, save_path=None):
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         ax.set_title("Leader Objective")
 
-    # Plot 2: IRL Gradient Norm
+    # Plot 2: IRL Delta FEM (Convergence Criterion)
     ax = axes[0, 1]
-    if "irl_gradient_norm" in stats and len(stats["irl_gradient_norm"]) > 0:
-        ax.plot(stats["irl_gradient_norm"], "r-", linewidth=2, alpha=0.7, label="Gradient Norm")
-        ax.axhline(y=0.025, color="g", linestyle="--", linewidth=2, label="Tolerance (0.025)")
+    if "irl_delta_fem" in stats and len(stats["irl_delta_fem"]) > 0:
+        ax.plot(stats["irl_delta_fem"], "r-", linewidth=2, alpha=0.7, label="δ_FEM")
+        ax.axhline(y=0.05, color="g", linestyle="--", linewidth=2, label="Tolerance (0.05)")
         ax.set_xlabel("IRL Iteration", fontsize=12)
-        ax.set_ylabel("Gradient Norm", fontsize=12)
-        ax.set_title("MDCE IRL Gradient Norm", fontsize=14, fontweight="bold")
+        ax.set_ylabel("δ_FEM (Relative Error)", fontsize=12)
+        ax.set_title("MDCE IRL Convergence (δ_FEM)", fontsize=14, fontweight="bold")
         ax.set_yscale("log")
         ax.grid(True, alpha=0.3)
         ax.legend()
     else:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("MDCE IRL Gradient Norm")
+        ax.set_title("MDCE IRL Convergence (δ_FEM)")
 
     # Plot 3: IRL Likelihood
     ax = axes[0, 2]
@@ -104,11 +104,11 @@ def plot_learning_curves(stats, save_path=None):
         summary_text += f"  Final: {final_obj:.4f}\n"
         summary_text += f"  Improvement: {improvement:+.4f}\n\n"
 
-    if "irl_gradient_norm" in stats and len(stats["irl_gradient_norm"]) > 0:
-        final_grad = stats["irl_gradient_norm"][-1]
-        converged = "Yes" if final_grad < 0.025 else "No"
+    if "irl_delta_fem" in stats and len(stats["irl_delta_fem"]) > 0:
+        final_delta_fem = stats["irl_delta_fem"][-1]
+        converged = "Yes" if final_delta_fem < 0.05 else "No"
         summary_text += "MDCE IRL:\n"
-        summary_text += f"  Final Gradient: {final_grad:.6f}\n"
+        summary_text += f"  Final δ_FEM: {final_delta_fem:.6f}\n"
         summary_text += f"  Converged: {converged}\n\n"
 
     if "leader_gradient_norm" in stats and len(stats["leader_gradient_norm"]) > 0:

@@ -88,6 +88,9 @@ class BilevelRL:
         # Statistics
         self.stats = defaultdict(list)
 
+        # Cache for true Q-values (computed only once per environment)
+        self._cached_true_q_values = None
+
     def _default_feature_fn(self, state, leader_action, follower_action):
         """Default feature function (identity).
 
@@ -236,6 +239,37 @@ class BilevelRL:
 
         return Q_true
 
+    def _display_softq_stats(self, soft_q_learning, irl_iteration: int):
+        """Display statistics of Q-values from Soft Q-Learning.
+
+        Args:
+            soft_q_learning: SoftQLearning instance
+            irl_iteration: Current IRL iteration number
+
+        """
+        Q = soft_q_learning.Q
+        num_states = self.env_spec.observation_space.n
+        num_leader_actions = self.env_spec.leader_action_space.n
+        num_follower_actions = self.env_spec.action_space.n  # FIXED: follower uses action_space
+
+        # Extract all Q-values
+        q_values = []
+        for s in range(num_states):
+            for a in range(num_leader_actions):
+                for b in range(num_follower_actions):
+                    q_val = soft_q_learning.get_q_value(s, a, b)
+                    q_values.append(q_val)
+
+        q_values = np.array(q_values)
+
+        print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning Q-value Statistics ---")
+        print(f"  Min:  {np.min(q_values):8.4f}")
+        print(f"  Max:  {np.max(q_values):8.4f}")
+        print(f"  Mean: {np.mean(q_values):8.4f}")
+        print(f"  Std:  {np.std(q_values):8.4f}")
+        print(f"  Non-zero entries: {np.count_nonzero(q_values)}/{len(q_values)}")
+        print()
+
     def _display_follower_q_values(self, env=None, show_true_q: bool = True):
         """Display follower's learned Q-values in a readable format.
 
@@ -255,12 +289,14 @@ class BilevelRL:
         num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
         num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
 
-        # Compute true Q-values if requested
+        # Compute true Q-values if requested (use cache if available)
         Q_true = None
         if show_true_q and env is not None:
-            print("\nComputing true optimal Q-values...")
-            Q_true = self._compute_true_q_values(env)
-            print()
+            if self._cached_true_q_values is None:
+                print("\nComputing true optimal Q-values (first time only)...")
+                self._cached_true_q_values = self._compute_true_q_values(env)
+                print()
+            Q_true = self._cached_true_q_values
 
         print("\nFollower Q-Function: Q_F(s, a, b)")
         if Q_true:
@@ -481,6 +517,40 @@ class BilevelRL:
 
             policy_fn = make_policy_fn(temp_soft_q_learning)
 
+            # Display Q-values after Soft Q-Learning (for debugging convergence)
+            if verbose and irl_iteration % 10 == 0:
+                self._display_softq_stats(temp_soft_q_learning, irl_iteration)
+
+                # Display estimated rewards for all (s,a,b) combinations
+                print(f"\n--- IRL iteration {irl_iteration}: Estimated Rewards r_F(s,a,b) = w^T φ ---")
+                for s in range(3):  # States 0, 1, 2
+                    print(f"  State {s}:")
+                    for a in range(2):  # Leader actions 0, 1
+                        rewards_str = "  ".join([f"b={b}: {reward_fn(s, a, b):6.3f}" for b in range(3)])
+                        print(f"    Leader a={a}: {rewards_str}")
+
+                # Display learned policy from temp_soft_q_learning
+                print(f"\n--- IRL iteration {irl_iteration}: Learned Follower Policy π_F(b|s,a) ---")
+                for s in range(3):
+                    print(f"  State {s}:")
+                    for a in range(2):
+                        # Get action probabilities
+                        probs = []
+                        q_vals = []
+                        for b in range(3):
+                            q_val = temp_soft_q_learning.get_q_value(s, a, b)
+                            q_vals.append(q_val)
+
+                        # Compute softmax probabilities
+                        q_tensor = torch.tensor(q_vals)
+                        probs_tensor = torch.softmax(q_tensor / temp_soft_q_learning.temperature, dim=0)
+                        probs = probs_tensor.detach().cpu().numpy()
+
+                        prob_str = "  ".join([f"π(b={b})={probs[b]:.3f}" for b in range(3)])
+                        q_str = "  ".join([f"Q(s,a,{b})={q_vals[b]:6.2f}" for b in range(3)])
+                        print(f"    Leader a={a}: {prob_str}")
+                        print(f"              Q: {q_str}")
+
             # Step 2.3: Compute current policy FEV φ̄_{g_{w^n}}^{γ_F}
             policy_fev = self.mdce_irl.compute_policy_fev(
                 policy_fn,
@@ -493,36 +563,150 @@ class BilevelRL:
             gradient = expert_fev - policy_fev
 
             # Update w: w^n ← w^n + α(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
-            # Learning rate schedule: α(n) = 0.1 / (1.0 + n)
-            # More conservative: n=0→0.1, n=9→0.01, n=99→0.001
-            learning_rate_schedule = 0.1 / (1.0 + irl_iteration)
+            # Learning rate schedule: α(n) = 0.1 / (1.0 + 0.01*n)
+            # Slower decay: n=0→0.1, n=10→0.091, n=100→0.05, n=1000→0.009
+            learning_rate_schedule = 0.1 / (1.0 + 0.01 * irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + learning_rate_schedule * gradient
 
-            # Step 2.5: Check convergence
-            if torch.norm(gradient) < self.mdce_irl.tolerance:
+            # Step 2.5: Check convergence using FEM constraint
+            # δ_FEM(f, f') = max_k |f_k - f'_k| / |f'_k|
+            # δ_FEM(policy_fev, expert_fev) where f' = expert_fev (denominator)
+            #
+            # IMPORTANT: Only compute relative error for features that appear in expert trajectories
+            # For features with zero expert FEV (e.g., unreachable states), use absolute error instead
+            epsilon = 1e-8
+            mask = torch.abs(expert_fev) > epsilon  # True for non-zero expert features
+
+            # Relative error for non-zero expert features
+            relative_errors = torch.abs(gradient) / (torch.abs(expert_fev) + epsilon)
+
+            # Absolute error for zero expert features (to detect policy deviation)
+            absolute_errors = torch.abs(gradient)
+
+            # Use relative error where expert_fev > 0, absolute error otherwise
+            errors = torch.where(mask, relative_errors, absolute_errors)
+            delta_fem = torch.max(errors).item()
+            max_error_idx = torch.argmax(errors).item()
+
+            # CRITICAL: Update self.soft_q_learning with estimated reward-based policy
+            # This is g_{w^n} that will be used in Steps 3-5 for leader optimization
+            self.soft_q_learning = temp_soft_q_learning
+
+            if delta_fem < self.mdce_irl.tolerance:
                 if verbose:
-                    print(f"MDCE IRL converged at iteration {irl_iteration}")
+                    print(f"MDCE IRL converged at iteration {irl_iteration}: δ_FEM={delta_fem:.6f}")
                 break
 
-            # Log IRL metrics
+            # Log IRL metrics (also log delta_fem for monitoring)
             gradient_norm = torch.norm(gradient).item()
             self.stats["irl_gradient_norm"].append(gradient_norm)
+            self.stats.setdefault("irl_delta_fem", []).append(delta_fem)
 
             if verbose and irl_iteration % 10 == 0:
                 likelihood = self.mdce_irl.compute_likelihood(trajectories, policy_fn)
                 self.stats["irl_likelihood"].append((irl_iteration, likelihood))
+
+                # Display FEV comparison
                 print(
-                    f"IRL iteration {irl_iteration}: ||gradient||={gradient_norm:.6f}, likelihood={likelihood:.6f}",
+                    f"IRL iteration {irl_iteration}: δ_FEM={delta_fem:.6f}, ||gradient||={gradient_norm:.6f}, likelihood={likelihood:.6f}",
                 )
+                print(f"  Expert FEV:  {expert_fev.detach().cpu().numpy()}")
+                print(f"  Policy FEV:  {policy_fev.detach().cpu().numpy()}")
+
+                # Show which features are masked (zero in expert FEV)
+                mask_np = mask.detach().cpu().numpy()
+                zero_features = [i for i, m in enumerate(mask_np) if not m]
+                if zero_features:
+                    print(f"  Zero expert features (using absolute error): {zero_features}")
+
+                # Show error at max_error_idx
+                is_relative = mask[max_error_idx].item()
+                error_type = "relative" if is_relative else "absolute"
+                print(
+                    f"  Max error at feature {max_error_idx} ({error_type}): expert={expert_fev[max_error_idx]:.4f}, policy={policy_fev[max_error_idx]:.4f}, error={errors[max_error_idx]:.4f}",
+                )
+                # Display estimated reward parameters
+                w_norm = torch.norm(self.mdce_irl.w).item()
+                w_np = self.mdce_irl.w.detach().cpu().numpy()
+                print(f"  Reward params w (||w||={w_norm:.4f}):")
+                print(f"    w = {w_np}")
+                # Interpret w for one-hot features: [s0, s1, s2, a0, a1, b0, b1, b2]
+                if len(w_np) == 8:
+                    print(f"    State weights:    [s0={w_np[0]:.3f}, s1={w_np[1]:.3f}, s2={w_np[2]:.3f}]")
+                    print(f"    Leader weights:   [a0={w_np[3]:.3f}, a1={w_np[4]:.3f}]")
+                    print(f"    Follower weights: [b0={w_np[5]:.3f}, b1={w_np[6]:.3f}, b2={w_np[7]:.3f}]")
+                    # Example reward calculation: r_F(s,a,b) = w^T φ(s,a,b)
+                    # For (s=0, a=0, b=2): φ = [1,0,0,1,0,0,0,1] → r = w[0]+w[3]+w[7]
+                    example_reward = w_np[0] + w_np[3] + w_np[7]
+                    print(f"    Example: r_F(s=0,a=0,b=2) = w[0]+w[3]+w[7] = {example_reward:.3f}")
 
         return self.mdce_irl.w
+
+    def _generate_expert_trajectories(self, env, n_trajectories: int = 50, verbose: bool = False):
+        """Generate expert demonstration trajectories using current leader policy.
+
+        Collects trajectories where:
+        - Leader uses current policy (self.leader_policy or self.leader_policy_table)
+        - Follower uses optimal response (env.get_opt_ag_act_array())
+
+        Args:
+            env: Environment instance
+            n_trajectories: Number of trajectories to generate
+            verbose: Whether to print progress
+
+        Returns:
+            List of trajectory dictionaries for MDCE IRL
+
+        """
+        trajectories = []
+
+        for traj_idx in range(n_trajectories):
+            obs, _ = env.reset()
+            traj = {
+                "observations": [],
+                "leader_actions": [],
+                "follower_actions": [],
+                "rewards": [],
+            }
+
+            while True:
+                # Leader uses current policy
+                if self._use_tabular_policy and self.leader_policy_table is not None:
+                    state = int(obs.item() if isinstance(obs, np.ndarray) and obs.size == 1 else obs)
+                    probs = self.leader_policy_table[state]
+                    leader_act = int(np.random.choice(len(probs), p=probs))
+                else:
+                    leader_act = self.leader_policy(obs)
+
+                # Follower uses optimal response
+                state = int(obs.item() if isinstance(obs, np.ndarray) and obs.size == 1 else obs)
+                follower_act = env.get_opt_ag_act_array()[leader_act, state]
+
+                traj["observations"].append(obs)
+                traj["leader_actions"].append(leader_act)
+                traj["follower_actions"].append(follower_act)
+
+                env_step = env.step(leader_act, follower_act)
+                traj["rewards"].append(env_step.reward)
+
+                obs = env_step.observation
+
+                if env_step.last:
+                    break
+
+            trajectories.append(traj)
+
+            if verbose and (traj_idx + 1) % 10 == 0:
+                print(f"  Generated {traj_idx + 1}/{n_trajectories} expert trajectories")
+
+        return trajectories
 
     def _get_follower_actions(self):
         """Get all possible follower actions."""
         action_space = self.env_spec.follower_policy_env_spec.action_space
         if hasattr(action_space, "n"):
             return list(range(action_space.n))
-            return [action_space.sample() for _ in range(10)]
+        return [action_space.sample() for _ in range(10)]
 
     def _get_follower_action_probs(self, state, leader_action):
         """Get follower action probabilities g_{w^n}(b|s, a) for given state and leader action.
@@ -1186,7 +1370,6 @@ class BilevelRL:
     def train(
         self,
         env,
-        expert_trajectories: list[dict],
         n_leader_iterations: int = 1000,
         n_follower_iterations: int = 1000,
         n_episodes_per_iteration: int = 10,
@@ -1262,6 +1445,7 @@ class BilevelRL:
 
                 if verbose:
                     print("Step 0: Learning follower policy with true rewards from environment...")
+
                 # Follower learns by interacting with environment
                 # The rewards are obtained directly from env.step() calls
                 total_steps = 0
@@ -1369,9 +1553,10 @@ class BilevelRL:
                     self._display_follower_q_values(env=env, show_true_q=True)
                     print("=" * 80 + "\n")
 
-            # Step 1: Collect trajectories
+            # Step 1: Collect trajectories using current policies
             if verbose:
                 print(f"Step 1: Collecting {n_episodes_per_iteration} episodes...")
+
             observations_list = []
             leader_actions_list = []
             follower_actions_list = []
@@ -1382,18 +1567,9 @@ class BilevelRL:
             last_flags_list = []
             time_steps_list = []
 
-            # Store trajectories for MDCE IRL (episode format)
-            trajectories_for_irl = []
-
             for _ in range(n_episodes_per_iteration):
                 obs, _ = env.reset()
                 time_step = 0
-
-                # Episode trajectory for MDCE IRL
-                episode_obs = []
-                episode_leader_acts = []
-                episode_follower_acts = []
-                episode_rewards = []
 
                 while True:
                     # Get joint action
@@ -1416,27 +1592,11 @@ class BilevelRL:
                     last_flags_list.append(1 if env_step.last else 0)
                     time_steps_list.append(time_step)
 
-                    # Store for MDCE IRL trajectory
-                    episode_obs.append(obs)
-                    episode_leader_acts.append(leader_act)
-                    episode_follower_acts.append(follower_act)
-                    episode_rewards.append(env_step.reward)
-
                     obs = env_step.observation
                     time_step += 1
 
                     if env_step.last:
                         break
-
-                # Store episode trajectory for MDCE IRL (for next iteration)
-                trajectories_for_irl.append(
-                    {
-                        "observations": episode_obs,
-                        "leader_actions": episode_leader_acts,
-                        "follower_actions": episode_follower_acts,
-                        "rewards": episode_rewards,
-                    },
-                )
 
             # Add transitions to replay buffer
             if observations_list:
@@ -1455,27 +1615,34 @@ class BilevelRL:
             # Step 2: MDCE IRL - Leader estimates follower's reward function
             # Algorithm Step 2: MDCE IRL
             # Purpose: リーダーはフォロワーの報酬を観測できないため、
-            #          収集した軌跡（フォロワーの行動）から報酬関数を逆推定する
-            # - Compute expert FEV φ̄_expert^{γ_F} from D (collected trajectories)
+            #          エキスパート軌跡（フォロワーの最適行動のデモ）から報酬関数を逆推定する
+            # - Compute expert FEV φ̄_expert^{γ_F} from expert demonstrations
             # - For IRL update step i = 1 to I:
             #   - Reconstruct Follower Q-Function (Soft Q-Learning with estimated reward)
             #   - Derive current policy g_{w^n} from Q̂_F
             #   - Compute current policy FEV φ̄_{g_{w^n}}^{γ_F}
             #   - If converged: Return w^n, g_{w^n}
             #   - Update: w^n ← w^n + δ(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
+
+            # Generate expert trajectories with current leader policy
+            # (Follower's optimal response to current leader)
+            if verbose:
+                print("Step 2: Generating expert trajectories with current leader policy...")
+            current_expert_trajectories = self._generate_expert_trajectories(
+                env,
+                n_trajectories=n_episodes_per_iteration,
+                verbose=verbose,
+            )
+
             if verbose:
                 print("Step 2: Leader estimates follower's reward function using MDCE IRL...")
 
-            # Use collected trajectories for MDCE IRL
-            if trajectories_for_irl:
-                w = self.estimate_follower_reward(trajectories_for_irl, env, verbose=verbose)
-            else:
-                # Fallback: use expert trajectories if no trajectories collected
-                if verbose:
-                    print("No trajectories collected, using expert trajectories for MDCE IRL...")
-                w = self.estimate_follower_reward(expert_trajectories, env, verbose=verbose)
+            # MDCE IRL uses current expert demonstration trajectories
+            # This estimates follower's reward function and updates self.soft_q_learning with g_{w^n}
+            self.estimate_follower_reward(current_expert_trajectories, env, verbose=verbose)
 
-            # Note: MDCE IRLで推定された報酬wは、リーダーの勾配計算（Step 4）で使用される
+            # Note: MDCE IRLで推定された方策 g_{w^n} は self.soft_q_learning に保存され、
+            # Step 3（Critic更新）とStep 4（勾配計算）で使用される
             # フォロワー自身は次のイテレーションのStep 0で真の報酬を使って再学習する
 
             # Step 3: Update leader's Critic (Q-table)

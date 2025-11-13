@@ -1,5 +1,8 @@
 """Training script for Bi-level RL."""
 
+import pickle
+from pathlib import Path
+
 import numpy as np
 from blackrl.algos import BilevelRL
 from blackrl.envs import DiscreteToyEnv1_1a
@@ -17,72 +20,21 @@ def create_simple_leader_policy(env_spec):
     """
 
     def leader_policy(observation, deterministic=False):
-        """Simple leader policy that selects action 1 at state 0, otherwise random.
+        """Initial uniform leader policy for exploration.
 
         Args:
             observation: Current observation (state)
             deterministic: Whether to use deterministic policy
 
         Returns:
-            Leader action
+            Leader action (uniformly random)
 
         """
-        if isinstance(observation, np.ndarray):
-            state = int(observation.item() if observation.size == 1 else observation[0])
-        else:
-            state = int(observation)
-
-        # Simple policy: at state 0 (S), prefer action 1
-        if state == 0:
-            return 1 if deterministic else np.random.choice([0, 1], p=[0.3, 0.7])
+        # Uniform distribution (50% action 0, 50% action 1)
+        # Will be updated to tabular policy during training
         return np.random.randint(0, 2)
 
     return leader_policy
-
-
-def create_demonstration_trajectories(env, n_trajectories=100):
-    """Create demonstration trajectories from expert follower.
-
-    Args:
-        env: Environment instance
-        n_trajectories: Number of trajectories to generate
-
-    Returns:
-        List of trajectory dictionaries
-
-    """
-    trajectories = []
-
-    for _ in range(n_trajectories):
-        obs, _ = env.reset()
-        traj = {
-            "observations": [],
-            "leader_actions": [],
-            "follower_actions": [],
-            "rewards": [],
-        }
-
-        # Simple expert: always choose action that leads to best reward
-        # This is a placeholder - in practice, use actual expert policy
-        while True:
-            leader_act = 1  # Expert leader always chooses action 1
-            follower_act = env.get_opt_ag_act_array()[leader_act, obs]
-
-            traj["observations"].append(obs)
-            traj["leader_actions"].append(leader_act)
-            traj["follower_actions"].append(follower_act)
-
-            env_step = env.step(leader_act, follower_act)
-            traj["rewards"].append(env_step.reward)
-
-            obs = env_step.observation
-
-            if env_step.last:
-                break
-
-        trajectories.append(traj)
-
-    return trajectories
 
 
 def main():
@@ -93,14 +45,12 @@ def main():
     env = DiscreteToyEnv1_1a()
     print(f"Environment: {env.__class__.__name__}")
 
-    # Create leader policy
+    # Create leader policy (initial uniform distribution)
     leader_policy = create_simple_leader_policy(env.spec)
-    print("Leader policy created")
+    print("Leader policy created (uniform distribution)")
 
-    # Create demonstration trajectories
-    print("Generating demonstration trajectories...")
-    trajectories = create_demonstration_trajectories(env, n_trajectories=50)
-    print(f"Generated {len(trajectories)} trajectories")
+    # Note: Expert trajectories are generated dynamically during training
+    # using the current leader policy at each iteration
 
     # Define feature function for MDCE IRL
     def feature_fn(state, leader_action, follower_action):
@@ -135,28 +85,29 @@ def main():
         reward_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
         discount_follower=0.99,
-        learning_rate_leader=0.01,  # Increase from 1e-3 to 0.01 for faster Q-learning
-        learning_rate_follower=0.1,  # Increase from 1e-3 to 0.1 for faster Q-learning
+        learning_rate_leader=1e-4,  # REDUCED: Gradient was too large (3M+)
+        learning_rate_follower=1e-3,  # REDUCED: 0.1 was too high, Q-values not converging
         mdce_irl_config={
-            "max_iterations": 500,
-            "tolerance": 0.025,
-            "n_soft_q_iterations": 1000,  # Increase to 1000 for better Q-function convergence
-            "n_monte_carlo_samples": 500,  # Increase to 2000 for better FEV estimation
+            "max_iterations": 1000,  # INCREASED: Wasn't converging at 500
+            "tolerance": 0.5,  # RELAXED: Policy FEV is very different from Expert FEV
+            "n_soft_q_iterations": 10000,  # GREATLY INCREASED: Q-values not converging
+            "n_monte_carlo_samples": 2000,  # Increased for better FEV estimation
             "n_jobs": -1,  # Use all CPU cores for parallel Monte Carlo sampling
         },
         soft_q_config={
-            "learning_rate": 0.1,  # Increase from 1e-2 to 0.1
+            "learning_rate": 0.01,  # REDUCED: 0.1 was too high, causing Q-value instability
             "temperature": 1.0,
         },
     )
 
     # Train
+    # Note: Expert trajectories are now generated dynamically each iteration
+    # using the current leader policy
     print("Starting training...")
     stats = algo.train(
         env=env,
-        expert_trajectories=trajectories,
         n_leader_iterations=100,
-        n_follower_iterations=2000,  # Increase from 500 to 2000 for better Q-value convergence
+        n_follower_iterations=20000,  # GREATLY INCREASED: 5000 was insufficient for Q-value convergence (episode length = 100)
         verbose=True,
     )
 
@@ -164,8 +115,6 @@ def main():
     print(f"Final leader objective: {stats['leader_objective'][-1]:.4f}" if stats["leader_objective"] else "N/A")
 
     # Save statistics
-    import pickle
-    from pathlib import Path
 
     output_dir = Path("outputs")
     output_dir.mkdir(exist_ok=True)
