@@ -318,8 +318,6 @@ class BilevelRL:
             print("Follower Q-values not available (not initialized)")
             return
 
-        Q = self.soft_q_learning.Q
-
         # Get dimensions from env_spec
         num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
         num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
