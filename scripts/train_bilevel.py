@@ -33,7 +33,7 @@ def create_simple_leader_policy(env_spec):
         """
         # Uniform distribution (50% action 0, 50% action 1)
         # Will be updated to tabular policy during training
-        return np.random.randint(0, 2)
+        return [0.5, 0.5]
 
     return leader_policy
 
@@ -92,13 +92,13 @@ def main():
             "max_iterations": 100,
             "tolerance": 0.1,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
             "n_soft_q_iterations": 100,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 100,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_monte_carlo_samples": 2000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={
-            "learning_rate": 0.01,  # REDUCED: 0.2 caused rapid descent from optimistic init
+            "learning_rate": 0.1,  # REDUCED: 0.2 caused rapid descent from optimistic init
             "temperature": 1.0,  # Keep original problem definition (but may need to increase for better exploration)
-            "optimistic_init": 130.0,  # Optimistic initialization (lowered from 130 for faster convergence)
+            "optimistic_init": 120.0,  # Optimistic initialization (lowered from 130 for faster convergence)
         },
     )
 

@@ -222,48 +222,32 @@ class SoftQLearning:
         current_q = self.get_q_value(state, leader_action, follower_action)
 
         if done:
-            # Terminal state: Q = reward
             target_q = reward
         else:
-            # Compute expected soft value at next state
-            # E_{a'~f_θ_L(·|s')}[V_F^soft(s', a')]
-            next_leader_actions = self._sample_leader_actions(next_state)
             expected_soft_value = 0.0
+            try:
+                # リーダーの行動確率分布 [p(a=0), p(a=1)] を取得
+                leader_action_probs = self.leader_policy(next_state)
+            except Exception:
+                leader_action_probs = [0.5, 0.5]  # (フォールバック)
 
-            for next_leader_act in next_leader_actions:
-                soft_value = self.compute_soft_value(next_state, next_leader_act)
-                # Assume uniform distribution for simplicity
-                # In practice, use leader policy probabilities
-                expected_soft_value += soft_value / len(next_leader_actions)
+            # リーダーの全行動 (0 と 1) についてループ
+            leader_actions = [0, 1]  # DiscreteToyEnv の場合
+
+            for i, next_leader_act in enumerate(leader_actions):
+                if i < len(leader_action_probs):
+                    # V_F^soft(s', a') を計算
+                    soft_value = self.compute_soft_value(next_state, next_leader_act)
+
+                    # 期待値に加算: p(a'|s') * V(s', a')
+                    expected_soft_value += leader_action_probs[i] * soft_value
+            # --- 修正ここまで ---
 
             target_q = reward + self.discount * expected_soft_value
 
         # Update Q-value
         new_q = current_q + lr * (target_q - current_q)
         self.set_q_value(state, leader_action, follower_action, new_q)
-
-    def _sample_leader_actions(self, state: np.ndarray) -> list:
-        """Sample leader actions from leader policy.
-
-        Args:
-            state: State to sample actions for
-
-        Returns:
-            List of leader actions
-
-        """
-        # Sample from leader policy
-        # For discrete: return all actions with probabilities
-        # For continuous: sample multiple actions
-        if self.leader_policy is None:
-            # If no leader policy, return all possible actions
-            if hasattr(self.env_spec, "leader_action_space") and hasattr(self.env_spec.leader_action_space, "n"):
-                return list(range(self.env_spec.leader_action_space.n))
-            # Fallback: assume binary actions
-            return [0, 1]
-
-        n_samples = 5
-        return [self.leader_policy(state) for _ in range(n_samples)]
 
     def get_policy(
         self,

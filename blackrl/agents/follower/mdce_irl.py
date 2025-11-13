@@ -149,13 +149,27 @@ class MDCEIRL:
         t = 0
 
         while True:
+            # --- 修正ここから ---
             # Sample leader action
-            leader_act = leader_policy(obs)
+            # leader_act = leader_policy(obs) # <- 変更前 (クラッシュの原因)
+
+            # リーダーの方策（確率分布 [p(0), p(1)]）を取得
+            leader_probs = leader_policy(obs)
+            if not isinstance(leader_probs, (list, np.ndarray)):
+                # (フォールバック) もし leader_policy が int を返した場合
+                leader_act = leader_probs
+            else:
+                # 確率分布からサンプリングして int (0 or 1) に変換
+                n_leader_actions = len(leader_probs)
+                leader_act = np.random.choice(n_leader_actions, p=leader_probs)
+            # --- 修正ここまで ---
 
             # Sample follower action from policy
+            # これで follower_act = policy(obs, (int)leader_act) となり安全
             follower_act = policy(obs, leader_act)
 
             # Compute feature vector
+            # これで phi_t = self.feature_fn(obs, (int)leader_act, ...) となり安全
             phi_t = self.feature_fn(obs, leader_act, follower_act)
             if isinstance(phi_t, np.ndarray):
                 phi_t = torch.from_numpy(phi_t).float()
