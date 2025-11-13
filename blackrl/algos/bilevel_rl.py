@@ -11,6 +11,7 @@ where:
     - g^*: Follower's optimal response policy
 """
 
+import time
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -212,20 +213,24 @@ class BilevelRL:
                             # Terminal state
                             Q_true[(s, a, b)] = reward
                         else:
-                            # Bellman update: Q(s,a,b) = r + γ * V(s')
-                            # V(s') = max_b Q(s', a', b) for any a' (we'll average over leader actions)
+                            # Bellman update for Soft Q-Learning: Q(s,a,b) = r + γ * E_{a'}[V^soft(s',a')]
+                            # V^soft(s',a') = temperature × log Σ_{b'} exp(Q(s',a',b') / temperature)
                             next_state_int = int(next_state.item() if isinstance(next_state, np.ndarray) else next_state)
 
-                            # For simplicity, assume uniform leader policy for next state value
+                            # Get temperature from soft_q_config (default 1.0)
+                            temperature = self.soft_q_config.get("temperature", 1.0)
+
+                            # Assume uniform leader policy for next state value
                             v_next = 0.0
                             for a_next in range(num_leader_actions):
-                                max_q_next = max(
-                                    [
-                                        Q_old.get((next_state_int, a_next, b_next), 0.0)
-                                        for b_next in range(num_follower_actions)
-                                    ],
-                                )
-                                v_next += max_q_next / num_leader_actions
+                                # Compute soft value: V^soft(s',a') = temperature × log Σ_{b'} exp(Q(s',a',b')/temperature)
+                                q_values = [
+                                    Q_old.get((next_state_int, a_next, b_next), 0.0) for b_next in range(num_follower_actions)
+                                ]
+                                # Convert to torch for logsumexp
+                                q_tensor = torch.tensor(q_values)
+                                soft_v = temperature * torch.logsumexp(q_tensor / temperature, dim=0).item()
+                                v_next += soft_v / num_leader_actions
 
                             Q_true[(s, a, b)] = reward + self.discount_follower * v_next
 
@@ -234,8 +239,11 @@ class BilevelRL:
                         max_delta = max(max_delta, delta)
 
             if max_delta < tolerance:
-                print(f"True Q-values converged in {iteration + 1} iterations")
+                print(f"True Q-values converged in {iteration + 1} iterations (max_delta={max_delta:.6f})")
                 break
+
+        if iteration == max_iterations - 1:
+            print(f"WARNING: True Q-values did NOT converge after {max_iterations} iterations (max_delta={max_delta:.6f})")
 
         return Q_true
 
@@ -269,6 +277,34 @@ class BilevelRL:
         print(f"  Std:  {np.std(q_values):8.4f}")
         print(f"  Non-zero entries: {np.count_nonzero(q_values)}/{len(q_values)}")
         print()
+
+    def _display_leader_q_values(self):
+        """Display leader's Q-values in a readable format."""
+        if self.leader_q_table is None:
+            print("Leader Q-table not initialized")
+            return
+
+        num_states = self.leader_q_table.shape[0]
+        num_leader_actions = self.leader_q_table.shape[1]
+        num_follower_actions = self.leader_q_table.shape[2]
+
+        print("\nLeader Q-Function: Q_L(s, a, b)")
+        print("-" * 80)
+
+        for s in range(num_states):
+            print(f"\nState {s}:")
+            for a in range(num_leader_actions):
+                q_str = "  ".join([f"Q({s},{a},{b})={self.leader_q_table[s, a, b]:.4f}" for b in range(num_follower_actions)])
+                print(f"  Leader action {a}: {q_str}")
+
+        # Statistics
+        q_values_flat = self.leader_q_table.flatten()
+        print("\nQ-value Statistics (Leader):")
+        print(f"  Min: {np.min(q_values_flat):.4f}")
+        print(f"  Max: {np.max(q_values_flat):.4f}")
+        print(f"  Mean: {np.mean(q_values_flat):.4f}")
+        print(f"  Std:  {np.std(q_values_flat):.4f}")
+        print(f"  Non-zero entries: {np.count_nonzero(q_values_flat)}/{q_values_flat.size}")
 
     def _display_follower_q_values(self, env=None, show_true_q: bool = True):
         """Display follower's learned Q-values in a readable format.
@@ -457,6 +493,7 @@ class BilevelRL:
             # n_soft_q_iterations = int(min(100, max(1, self.learning_rate_follower * 1000)))
             n_soft_q_iterations = self.mdce_irl.n_soft_q_iterations
             # Adjust as needed
+            soft_q_start_time = time.time()
             for _ in range(n_soft_q_iterations):
                 obs, _ = env.reset()
                 while True:
@@ -491,6 +528,7 @@ class BilevelRL:
                     obs = env_step.observation
                     if env_step.last:
                         break
+            soft_q_time = time.time() - soft_q_start_time
 
             # Step 2.2: Derive current policy g_{w^n} from Q̂_F
             def make_policy_fn(sq_instance):
@@ -518,7 +556,8 @@ class BilevelRL:
             policy_fn = make_policy_fn(temp_soft_q_learning)
 
             # Display Q-values after Soft Q-Learning (for debugging convergence)
-            if verbose and irl_iteration % 10 == 0:
+            # Show every iteration for better progress visibility
+            if verbose and (irl_iteration % 10 == 0 or irl_iteration < 5):
                 self._display_softq_stats(temp_soft_q_learning, irl_iteration)
 
                 # Display estimated rewards for all (s,a,b) combinations
@@ -552,15 +591,24 @@ class BilevelRL:
                         print(f"              Q: {q_str}")
 
             # Step 2.3: Compute current policy FEV φ̄_{g_{w^n}}^{γ_F}
+            fev_start_time = time.time()
             policy_fev = self.mdce_irl.compute_policy_fev(
                 policy_fn,
                 self.leader_policy,
                 env,
             )
+            fev_time = time.time() - fev_start_time
 
             # Step 2.4: Compare with expert FEV and update w
             # Compute gradient: ∇L(w) ∝ φ̄_expert^γ - φ̄_{g_w}^γ
             gradient = expert_fev - policy_fev
+
+            # Log timing information (every 10 iterations to reduce clutter)
+            if verbose and irl_iteration % 10 == 0:
+                print(f"\n--- IRL iteration {irl_iteration}: Timing ---")
+                print(f"  Soft Q-Learning: {soft_q_time:.2f}s ({n_soft_q_iterations} episodes)")
+                print(f"  Policy FEV computation: {fev_time:.2f}s ({self.mdce_irl.n_monte_carlo_samples} samples)")
+                print(f"  Total per iteration: {soft_q_time + fev_time:.2f}s")
 
             # Update w: w^n ← w^n + α(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
             # Learning rate schedule: α(n) = 0.1 / (1.0 + 0.01*n)
@@ -706,7 +754,7 @@ class BilevelRL:
         action_space = self.env_spec.follower_policy_env_spec.action_space
         if hasattr(action_space, "n"):
             return list(range(action_space.n))
-        return [action_space.sample() for _ in range(10)]
+            return [action_space.sample() for _ in range(10)]
 
     def _get_follower_action_probs(self, state, leader_action):
         """Get follower action probabilities g_{w^n}(b|s, a) for given state and leader action.
@@ -1300,9 +1348,16 @@ class BilevelRL:
         first_term_gradients = first_term_gradients / state_action_counts
         second_term_gradients = second_term_gradients / state_action_counts
 
-        # Combine terms and normalize by (1 - γ_L)
-        policy_gradients = (first_term_gradients + second_term_gradients) / (1.0 - self.discount_leader)
+        # Normalize each term by (1 - γ_L) separately for analysis
+        first_term_normalized = first_term_gradients / (1.0 - self.discount_leader)
+        second_term_normalized = second_term_gradients / (1.0 - self.discount_leader)
 
+        # Combine terms
+        policy_gradients = first_term_normalized + second_term_normalized
+
+        # Compute norms for each term
+        first_term_norm = np.linalg.norm(first_term_normalized)
+        second_term_norm = np.linalg.norm(second_term_normalized)
         gradient_norm = np.linalg.norm(policy_gradients)
 
         # Compute advantages for statistics
@@ -1315,6 +1370,8 @@ class BilevelRL:
 
         return {
             "gradient_norm": gradient_norm,
+            "first_term_norm": first_term_norm,
+            "second_term_norm": second_term_norm,
             "estimated_gradient": np.mean(advantages),
             "mean_q_value": np.mean(q_values),
             "mean_advantage": np.mean(advantages),
@@ -1372,7 +1429,7 @@ class BilevelRL:
         env,
         n_leader_iterations: int = 1000,
         n_follower_iterations: int = 1000,
-        n_episodes_per_iteration: int = 10,
+        n_episodes_per_iteration: int = 50,
         n_critic_updates: int = 100,
         replay_buffer_size: int = 10000,
         verbose: bool = True,
@@ -1438,6 +1495,15 @@ class BilevelRL:
                     **soft_q_config,
                 )
 
+                # Debug: Check initial Q-values (first 3 state-action pairs)
+                if verbose:
+                    print("\nDEBUG: Initial Q-values (should be optimistic_init=130.0):")
+                    for s in range(2):  # States 0, 1
+                        for a in range(1):  # Leader action 0
+                            for b in range(3):  # Follower actions 0, 1, 2
+                                q_init = self.soft_q_learning.get_q_value(s, a, b)
+                                print(f"  Q({s},{a},{b}) = {q_init:.2f}")
+
                 # Create follower policy from learned Q-function
                 self.follower_policy = lambda obs, leader_act, deterministic=False: (
                     self.soft_q_learning.sample_action(obs, leader_act)
@@ -1500,11 +1566,13 @@ class BilevelRL:
                     print(f"  Average reward per episode: {total_reward / n_follower_iterations:.4f}\n")
 
                 # Display learned Q-values for verification
+                # Note: True Q values may not be comparable due to different assumptions
+                # (e.g., uniform leader policy in value iteration vs. actual learned policy)
                 if verbose:
                     print("\n" + "=" * 80)
                     print("FOLLOWER Q-VALUES AFTER STEP 0 (First Iteration)")
                     print("=" * 80)
-                    self._display_follower_q_values(env=env, show_true_q=True)
+                    self._display_follower_q_values(env=env, show_true_q=False)  # Disable True Q comparison
                     print("=" * 80 + "\n")
 
             else:
@@ -1550,7 +1618,7 @@ class BilevelRL:
                     print("\n" + "=" * 80)
                     print(f"FOLLOWER Q-VALUES AFTER STEP 0 (Iteration {iteration})")
                     print("=" * 80)
-                    self._display_follower_q_values(env=env, show_true_q=True)
+                    self._display_follower_q_values(env=env, show_true_q=False)  # Disable True Q comparison
                     print("=" * 80 + "\n")
 
             # Step 1: Collect trajectories using current policies
@@ -1651,6 +1719,14 @@ class BilevelRL:
                     print(f"Step 3: Updating leader's Critic ({n_critic_updates} updates)...")
                 self._update_leader_critic(replay_buffer, n_updates=n_critic_updates)
 
+                # Display leader Q-values after update
+                if verbose:
+                    print("\n" + "=" * 80)
+                    print(f"LEADER Q-VALUES AFTER STEP 3 (Iteration {iteration})")
+                    print("=" * 80)
+                    self._display_leader_q_values()
+                    print("=" * 80 + "\n")
+
             # Step 4: Estimate leader's gradient
             gradient_info = None
             if replay_buffer._current_size > 0:
@@ -1664,7 +1740,17 @@ class BilevelRL:
                     self.stats["leader_mean_q_value"].append(gradient_info.get("mean_q_value", 0.0))
 
                 if verbose and gradient_info:
-                    print(f"  Gradient norm: {gradient_info.get('gradient_norm', 0.0):.4f}")
+                    first_term_norm = gradient_info.get("first_term_norm", 0.0)
+                    second_term_norm = gradient_info.get("second_term_norm", 0.0)
+                    total_norm = gradient_info.get("gradient_norm", 0.0)
+
+                    print(f"  Total gradient norm: {total_norm:.4f}")
+                    print(
+                        f"    Term 1 (policy gradient): {first_term_norm:.4f} ({100 * first_term_norm / total_norm if total_norm > 0 else 0:.1f}%)",
+                    )
+                    print(
+                        f"    Term 2 (follower influence): {second_term_norm:.4f} ({100 * second_term_norm / total_norm if total_norm > 0 else 0:.1f}%)",
+                    )
                     print(f"  Mean Q-value: {gradient_info.get('mean_q_value', 0.0):.4f}")
 
             # Step 5: Update leader's Actor

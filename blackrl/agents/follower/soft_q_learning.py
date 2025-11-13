@@ -41,6 +41,7 @@ class SoftQLearning:
         learning_rate: float = 1e-3,
         temperature: float = 1.0,
         device: torch.device | None = None,
+        optimistic_init: float = 0.0,  # Optimistic initialization value
     ):
         self.env_spec = env_spec
         self.reward_fn = reward_fn  # Optional: only used if computing rewards internally
@@ -49,6 +50,7 @@ class SoftQLearning:
         self.learning_rate = learning_rate
         self.temperature = temperature
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.optimistic_init = optimistic_init
 
         # Q-function network (can be replaced with tabular or neural network)
         self.Q: dict | None = None
@@ -60,10 +62,18 @@ class SoftQLearning:
         This is a placeholder. In practice, you might use:
         - Tabular Q-function for discrete state/action spaces
         - Neural network for continuous/large state spaces
+
+        Uses optimistic initialization: Q(s,a,b) = optimistic_init
+        This encourages exploration of all state-action pairs.
         """
-        # For discrete spaces, use dictionary
+        # For discrete spaces, use dictionary with optimistic initialization
         # For continuous spaces, use neural network
-        self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+        if self.optimistic_init != 0.0:
+            # Optimistic initialization: default to high value
+            self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: self.optimistic_init)))
+        else:
+            # Standard initialization: default to 0
+            self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
 
     def compute_soft_value(
         self,
@@ -247,7 +257,7 @@ class SoftQLearning:
         # For continuous: sample multiple actions
         if self.leader_policy is None:
             # If no leader policy, return all possible actions
-            if hasattr(self.env_spec, 'leader_action_space') and hasattr(self.env_spec.leader_action_space, 'n'):
+            if hasattr(self.env_spec, "leader_action_space") and hasattr(self.env_spec.leader_action_space, "n"):
                 return list(range(self.env_spec.leader_action_space.n))
             # Fallback: assume binary actions
             return [0, 1]

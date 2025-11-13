@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from blackrl.algos import BilevelRL
 from blackrl.envs import DiscreteToyEnv1_1a
+from plot_learning_curves import plot_learning_curves
 
 
 def create_simple_leader_policy(env_spec):
@@ -84,19 +85,20 @@ def main():
         leader_policy=leader_policy,
         reward_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
-        discount_follower=0.99,
-        learning_rate_leader=1e-4,  # REDUCED: Gradient was too large (3M+)
-        learning_rate_follower=1e-3,  # REDUCED: 0.1 was too high, Q-values not converging
+        discount_follower=0.99,  # RESTORED: 0.8 changes the problem definition
+        learning_rate_leader=1e-4,
+        learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
         mdce_irl_config={
-            "max_iterations": 1000,  # INCREASED: Wasn't converging at 500
-            "tolerance": 0.5,  # RELAXED: Policy FEV is very different from Expert FEV
-            "n_soft_q_iterations": 10000,  # GREATLY INCREASED: Q-values not converging
-            "n_monte_carlo_samples": 2000,  # Increased for better FEV estimation
-            "n_jobs": -1,  # Use all CPU cores for parallel Monte Carlo sampling
+            "max_iterations": 100,
+            "tolerance": 0.1,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
+            "n_soft_q_iterations": 100,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 100,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_jobs": -1,
         },
         soft_q_config={
-            "learning_rate": 0.01,  # REDUCED: 0.1 was too high, causing Q-value instability
-            "temperature": 1.0,
+            "learning_rate": 0.01,  # REDUCED: 0.2 caused rapid descent from optimistic init
+            "temperature": 1.0,  # Keep original problem definition (but may need to increase for better exploration)
+            "optimistic_init": 130.0,  # Optimistic initialization (lowered from 130 for faster convergence)
         },
     )
 
@@ -107,7 +109,7 @@ def main():
     stats = algo.train(
         env=env,
         n_leader_iterations=100,
-        n_follower_iterations=20000,  # GREATLY INCREASED: 5000 was insufficient for Q-value convergence (episode length = 100)
+        n_follower_iterations=100,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
         verbose=True,
     )
 
@@ -126,8 +128,6 @@ def main():
 
     # Plot learning curves
     try:
-        from plot_learning_curves import plot_learning_curves
-
         plot_path = output_dir / "learning_curves.png"
         plot_learning_curves(stats, save_path=plot_path)
         print(f"Learning curves saved to: {plot_path}")

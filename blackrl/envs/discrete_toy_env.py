@@ -280,6 +280,17 @@ class DiscreteToyEnv1_1a(DiscreteToyEnvBase):
         self.rewards[2, :, 0] = -1
         self.r_range = (-1, 1)
 
+        # # Follower rewards now depend on leader action (for Bi-level RL)
+        # # State 1: Higher reward when leader cooperates (a=1)
+        # self.rewards[1, 0, 0] = 0.5   # Leader a=0 → moderate reward
+        # self.rewards[1, 1, 0] = 1.5   # Leader a=1 → high reward (cooperation)
+
+        # # State 2: Penalty depends on leader action
+        # self.rewards[2, 0, 0] = -1.5  # Leader a=0 → high penalty
+        # self.rewards[2, 1, 0] = -0.5  # Leader a=1 → low penalty (cooperation)
+
+        # self.r_range = (-1.5, 1.5)
+
         self.target_rewards[0, :, 1] = -1
         self.target_rewards[0, :, 2] = 1
         self.target_r_range = (-1, 1)
