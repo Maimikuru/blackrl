@@ -494,7 +494,20 @@ class BilevelRL:
             n_soft_q_iterations = self.mdce_irl.n_soft_q_iterations
             # Adjust as needed
             soft_q_start_time = time.time()
-            for _ in range(n_soft_q_iterations):
+
+            # Save initial Q-values to track convergence
+            initial_q_values = {}
+            for s_key in temp_soft_q_learning.Q:
+                initial_q_values[s_key] = {}
+                for a_key in temp_soft_q_learning.Q[s_key]:
+                    initial_q_values[s_key][a_key] = {}
+                    for b_key in temp_soft_q_learning.Q[s_key][a_key]:
+                        initial_q_values[s_key][a_key][b_key] = temp_soft_q_learning.Q[s_key][a_key][b_key]
+
+            # Track Q-value updates per iteration (every 10 episodes)
+            q_change_history = []
+
+            for episode_idx in range(n_soft_q_iterations):
                 obs, _ = env.reset()
                 while True:
                     # Sample leader action
@@ -528,7 +541,30 @@ class BilevelRL:
                     obs = env_step.observation
                     if env_step.last:
                         break
+
+                # Track Q-value changes every 10 episodes
+                if (episode_idx + 1) % 10 == 0:
+                    max_q_change = 0.0
+                    for s_key in temp_soft_q_learning.Q:
+                        for a_key in temp_soft_q_learning.Q[s_key]:
+                            for b_key in temp_soft_q_learning.Q[s_key][a_key]:
+                                q_current = temp_soft_q_learning.Q[s_key][a_key][b_key]
+                                q_initial = initial_q_values.get(s_key, {}).get(a_key, {}).get(b_key, 0.0)
+                                q_change = abs(q_current - q_initial)
+                                max_q_change = max(max_q_change, q_change)
+                    q_change_history.append((episode_idx + 1, max_q_change))
+
             soft_q_time = time.time() - soft_q_start_time
+
+            # Compute final max Q-value change
+            final_max_q_change = 0.0
+            for s_key in temp_soft_q_learning.Q:
+                for a_key in temp_soft_q_learning.Q[s_key]:
+                    for b_key in temp_soft_q_learning.Q[s_key][a_key]:
+                        q_current = temp_soft_q_learning.Q[s_key][a_key][b_key]
+                        q_initial = initial_q_values.get(s_key, {}).get(a_key, {}).get(b_key, 0.0)
+                        q_change = abs(q_current - q_initial)
+                        final_max_q_change = max(final_max_q_change, q_change)
 
             # Step 2.2: Derive current policy g_{w^n} from Q̂_F
             def make_policy_fn(sq_instance):
@@ -559,6 +595,14 @@ class BilevelRL:
             # Show every iteration for better progress visibility
             if verbose and (irl_iteration % 10 == 0 or irl_iteration < 5):
                 self._display_softq_stats(temp_soft_q_learning, irl_iteration)
+
+                # Display Q-value convergence statistics
+                print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning Convergence ---")
+                print(f"  Max Q-value change: {final_max_q_change:.6f}")
+                if len(q_change_history) > 0:
+                    print("  Q-value change history (every 10 episodes):")
+                    for ep, change in q_change_history:
+                        print(f"    Episode {ep:3d}: max_Δ_Q = {change:.6f}")
 
                 # Display estimated rewards for all (s,a,b) combinations
                 print(f"\n--- IRL iteration {irl_iteration}: Estimated Rewards r_F(s,a,b) = w^T φ ---")
