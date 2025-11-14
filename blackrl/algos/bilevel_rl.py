@@ -168,6 +168,107 @@ class BilevelRL:
         # Enable tabular policy mode
         self._use_tabular_policy = True
 
+    def _compute_softvi_q_values(self, env, max_iterations: int = 2000, tolerance: float = 1e-5, verbose: bool = True):
+        """Compute optimal Q-values for the follower using Soft Value Iteration (SoftVI).
+
+        This computes Q_F^*(s, a, b) using SoftVI, considering the current leader policy.
+        Uses Soft Q-Learning Bellman equation (SoftVI):
+            Q(s,a,b) = r(s,a,b) + γ * E_{a'~f_θ_L}[V^soft(s',a')]
+            V^soft(s',a') = temperature × log Σ_{b'} exp(Q(s',a',b') / temperature)
+
+        Args:
+            env: Environment instance
+            max_iterations: Maximum iterations for value iteration
+            tolerance: Convergence tolerance
+            verbose: Whether to print progress
+
+        Returns:
+            Dictionary mapping (s, a, b) -> Q_F^*(s, a, b)
+
+        """
+        num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
+        num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+        num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
+
+        # Get temperature from soft_q_config (default 1.0)
+        temperature = self.soft_q_config.get("temperature", 1.0)
+
+        # Initialize Q-values
+        Q = {}
+        for s in range(num_states):
+            for a in range(num_leader_actions):
+                for b in range(num_follower_actions):
+                    Q[(s, a, b)] = 0.0
+
+        # Soft Value Iteration
+        for iteration in range(max_iterations):
+            Q_old = Q.copy()
+            max_delta = 0.0
+
+            for s in range(num_states):
+                for a in range(num_leader_actions):
+                    for b in range(num_follower_actions):
+                        # Get reward and next state from environment
+                        env.reset(init_state=s)
+                        env_step = env.step(a, b)
+
+                        reward = env_step.reward
+                        next_state = env_step.observation
+
+                        if env_step.terminal:
+                            # True terminal state: no next state value
+                            Q[(s, a, b)] = reward
+                        else:
+                            # SoftVI Bellman update
+                            next_state_int = int(next_state.item() if isinstance(next_state, np.ndarray) else next_state)
+
+                            # Compute expected soft value: E_{a'~f_θ_L}[V^soft(s',a')]
+                            v_next = 0.0
+                            for a_next in range(num_leader_actions):
+                                # Get leader policy probability for next state
+                                if self._use_tabular_policy and self.leader_policy_table is not None:
+                                    leader_prob = self.leader_policy_table[next_state_int, a_next]
+                                else:
+                                    # For callable policy, estimate probability (simplification)
+                                    # In practice, we might need to sample or use a different approach
+                                    leader_prob = 1.0 / num_leader_actions  # Uniform approximation
+
+                                # Compute soft value: V^soft(s',a') = temperature × log Σ_{b'} exp(Q(s',a',b')/temperature)
+                                q_values = [
+                                    Q_old.get((next_state_int, a_next, b_next), 0.0) for b_next in range(num_follower_actions)
+                                ]
+                                # Convert to torch for logsumexp
+                                q_tensor = torch.tensor(q_values)
+                                soft_v = temperature * torch.logsumexp(q_tensor / temperature, dim=0).item()
+                                v_next += leader_prob * soft_v
+
+                            Q[(s, a, b)] = reward + self.discount_follower * v_next
+
+                        # Track convergence
+                        delta = abs(Q[(s, a, b)] - Q_old.get((s, a, b), 0.0))
+                        max_delta = max(max_delta, delta)
+
+            if verbose and (iteration + 1) % 100 == 0:
+                print(f"  SoftVI iteration {iteration + 1}: max_delta = {max_delta:.6f}")
+
+            if max_delta < tolerance:
+                if verbose:
+                    print(f"\n✓ SoftVI converged in {iteration + 1} iterations (max_delta={max_delta:.6f})")
+                break
+
+        if iteration == max_iterations - 1:
+            if verbose:
+                if max_delta < 1e-4:
+                    print(
+                        f"\n✓ SoftVI nearly converged after {max_iterations} iterations (max_delta={max_delta:.6f} < 1e-4)",
+                    )
+                else:
+                    print(
+                        f"\n⚠ WARNING: SoftVI did NOT converge after {max_iterations} iterations (max_delta={max_delta:.6f})",
+                    )
+
+        return Q
+
     def _compute_true_q_values(self, env, max_iterations: int = 1000, tolerance: float = 1e-6):
         """Compute true Q-values for the follower using value iteration.
 
@@ -1515,36 +1616,38 @@ class BilevelRL:
             # Note: フォロワーは環境から報酬を直接獲得できるため、真の報酬でQ_Fを学習する
             # （MDCE IRLはリーダーがフォロワーの報酬を推定するために使用し、ここでは使わない）
             if iteration == 0:
-                # First iteration: Follower learns its policy using true rewards from environment
+                # First iteration: Follower learns its policy using Soft Value Iteration (SoftVI)
                 if verbose:
-                    print("Step 0 (First iteration): Deriving initial follower policy using true rewards...")
+                    print("Step 0 (First iteration): Deriving initial follower policy using Soft Value Iteration (SoftVI)...")
 
-                # Follower learns Q_F using Soft Q-Learning with true rewards from environment
-                # The actual rewards are obtained from env.step() and passed directly to update()
-                # No reward_fn needed here
+                # Use SoftVI to compute optimal Q-values
+                if verbose:
+                    print("Computing optimal Q-values using SoftVI...")
+                Q_softvi = self._compute_softvi_q_values(
+                    env,
+                    max_iterations=2000,
+                    tolerance=1e-5,
+                    verbose=verbose,
+                )
 
-                # Initialize Soft Q-Learning
-                # The actual learning happens through environment interactions
+                # Initialize Soft Q-Learning with computed Q-values
                 soft_q_config = self.soft_q_config.copy()
                 soft_q_config.pop("learning_rate", None)
 
                 self.soft_q_learning = SoftQLearning(
                     env_spec=self.env_spec,
-                    reward_fn=None,  # Not needed: rewards come from env.step()
+                    reward_fn=None,  # Not needed: Q-values already computed
                     leader_policy=self.leader_policy,
                     discount=self.discount_follower,
                     learning_rate=self.learning_rate_follower,
                     **soft_q_config,
                 )
 
-                # Debug: Check initial Q-values (first 3 state-action pairs)
-                if verbose:
-                    print("\nDEBUG: Initial Q-values (should be optimistic_init=130.0):")
-                    for s in range(2):  # States 0, 1
-                        for a in range(1):  # Leader action 0
-                            for b in range(3):  # Follower actions 0, 1, 2
-                                q_init = self.soft_q_learning.get_q_value(s, a, b)
-                                print(f"  Q({s},{a},{b}) = {q_init:.2f}")
+                # Set Q-values from SoftVI
+                # Convert Q_softvi dict to nested defaultdict structure
+                self.soft_q_learning.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+                for (s, a, b), q_val in Q_softvi.items():
+                    self.soft_q_learning.Q[s][a][b] = q_val
 
                 # Create follower policy from learned Q-function
                 self.follower_policy = lambda obs, leader_act, deterministic=False: (
@@ -1552,67 +1655,16 @@ class BilevelRL:
                 )
 
                 if verbose:
-                    print("Step 0: Learning follower policy with true rewards from environment...")
-
-                # Follower learns by interacting with environment
-                # The rewards are obtained directly from env.step() calls
-                total_steps = 0
-                total_reward = 0.0
-                for episode_idx in range(n_follower_iterations):
-                    obs, _ = env.reset()
-                    episode_steps = 0
-                    episode_reward = 0.0
-                    while True:
-                        # Sample leader action
-                        if self._use_tabular_policy and self.leader_policy_table is not None:
-                            state = int(obs.item() if isinstance(obs, np.ndarray) and obs.size == 1 else obs)
-                            probs = self.leader_policy_table[state]
-                            leader_act = int(np.random.choice(len(probs), p=probs))
-                        else:
-                            leader_act = self.leader_policy(obs)
-
-                        # Sample follower action
-                        follower_act = self.soft_q_learning.sample_action(obs, leader_act)
-
-                        # Step environment and get TRUE follower reward
-                        env_step = env.step(leader_act, follower_act)
-                        true_follower_reward = env_step.reward  # This is the true follower reward
-
-                        # Update Q-function with TRUE reward
-                        self.soft_q_learning.update(
-                            obs,
-                            leader_act,
-                            follower_act,
-                            true_follower_reward,  # Use true reward, not estimated
-                            env_step.observation,
-                            env_step.last,
-                        )
-
-                        episode_steps += 1
-                        episode_reward += true_follower_reward
-                        obs = env_step.observation
-                        if env_step.last:
-                            break
-
-                    total_steps += episode_steps
-                    total_reward += episode_reward
-                    if verbose and episode_idx < 3:  # Print first 3 episodes
-                        print(f"  Episode {episode_idx}: {episode_steps} steps, total reward = {episode_reward:.4f}")
-
-                if verbose:
                     print("\nStep 0 Summary:")
-                    print(f"  Total episodes: {n_follower_iterations}")
-                    print(f"  Total steps: {total_steps}")
-                    print(f"  Average steps per episode: {total_steps / n_follower_iterations:.2f}")
-                    print(f"  Total reward: {total_reward:.4f}")
-                    print(f"  Average reward per episode: {total_reward / n_follower_iterations:.4f}\n")
+                    print("  Method: Soft Value Iteration (SoftVI)")
+                    print(f"  Q-values computed: {len(Q_softvi)} state-action pairs")
+                    print(f"  Discount factor: {self.discount_follower}")
+                    print(f"  Temperature: {self.soft_q_config.get('temperature', 1.0)}\n")
 
                 # Display learned Q-values for verification
-                # Note: True Q values may not be comparable due to different assumptions
-                # (e.g., uniform leader policy in value iteration vs. actual learned policy)
                 if verbose:
                     print("\n" + "=" * 80)
-                    print("FOLLOWER Q-VALUES AFTER STEP 0 (First Iteration)")
+                    print("FOLLOWER Q-VALUES AFTER STEP 0 (First Iteration - SoftVI)")
                     print("=" * 80)
                     self._display_follower_q_values(env=env, show_true_q=False)  # Disable True Q comparison
                     print("=" * 80 + "\n")
