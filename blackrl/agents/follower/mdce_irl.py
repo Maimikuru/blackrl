@@ -72,8 +72,9 @@ class MDCEIRL:
             Expert FEV vector of shape (K,)
 
         """
-        fev = None
-        total_weight = 0.0
+        # CRITICAL FIX: Use same computation method as Policy FEV
+        # Compute trajectory-wise normalized FEV, then take mean (same as compute_policy_fev)
+        all_traj_fev = []
 
         for traj in trajectories:
             obs = traj.get("observations", [])
@@ -113,18 +114,18 @@ class MDCEIRL:
 
                 weight += self.discount**t
 
-            if traj_fev is not None:
-                if fev is None:
-                    fev = traj_fev
-                else:
-                    fev = fev + traj_fev
-                total_weight += weight
+            # Normalize each trajectory individually (same as compute_policy_fev)
+            if traj_fev is not None and weight > 0:
+                normalized_traj_fev = traj_fev / weight
+                all_traj_fev.append(normalized_traj_fev)
 
-        # Normalize by total weight
-        if fev is not None and total_weight > 0:
-            fev = fev / total_weight
+        # Take mean of normalized trajectory FEVs (same as compute_policy_fev)
+        if len(all_traj_fev) > 0:
+            fev = torch.mean(torch.stack(all_traj_fev), dim=0)
+        else:
+            fev = torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
 
-        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
+        return fev
 
     def _sample_trajectory_fev(
         self,
@@ -226,23 +227,23 @@ class MDCEIRL:
             delayed(self._sample_trajectory_fev)(policy, leader_policy, env) for _ in range(self.n_monte_carlo_samples)
         )
 
-        # Aggregate results
-        fev = None
-        total_weight = 0.0
+        # CRITICAL FIX: Use same computation method as Expert FEV
+        # Normalize each trajectory individually, then take mean (same as compute_expert_fev)
+        all_traj_fev = []
 
         for traj_fev, weight in results:
-            if traj_fev is not None:
-                if fev is None:
-                    fev = traj_fev
-                else:
-                    fev = fev + traj_fev
-                total_weight += weight
+            if traj_fev is not None and weight > 0:
+                # Normalize each trajectory individually (same as compute_expert_fev)
+                normalized_traj_fev = traj_fev / weight
+                all_traj_fev.append(normalized_traj_fev)
 
-        # Normalize by total weight
-        if fev is not None and total_weight > 0:
-            fev = fev / total_weight
+        # Take mean of normalized trajectory FEVs (same as compute_expert_fev)
+        if len(all_traj_fev) > 0:
+            fev = torch.mean(torch.stack(all_traj_fev), dim=0)
+        else:
+            fev = torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
 
-        return fev if fev is not None else torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
+        return fev
 
     def compute_likelihood(
         self,

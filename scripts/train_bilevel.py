@@ -85,20 +85,20 @@ def main():
         leader_policy=leader_policy,
         reward_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
-        discount_follower=0.99,  # RESTORED: 0.8 changes the problem definition
+        discount_follower=0.8,  # RESTORED: 0.8 changes the problem definition
         learning_rate_leader=1e-4,
         learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
         mdce_irl_config={
             "max_iterations": 100,
             "tolerance": 0.1,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
-            "n_soft_q_iterations": 100,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 2000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_soft_q_iterations": 500,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 1000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={
             "learning_rate": 0.1,  # REDUCED: 0.2 caused rapid descent from optimistic init
             "temperature": 1.0,  # Keep original problem definition (but may need to increase for better exploration)
-            "optimistic_init": 120.0,  # Optimistic initialization (lowered from 130 for faster convergence)
+            "optimistic_init": 0,  # Optimistic initialization (lowered from 130 for faster convergence)
         },
     )
 
@@ -109,7 +109,7 @@ def main():
     stats = algo.train(
         env=env,
         n_leader_iterations=100,
-        n_follower_iterations=100,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
+        n_follower_iterations=500,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
         verbose=True,
     )
 
