@@ -7,9 +7,11 @@ SoftVI uses the Soft Q-Learning Bellman equation with value iteration to find
 the optimal Q-function for maximum entropy policies.
 """
 
+import pickle
+
 import numpy as np
 import torch
-from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.envs import DiscreteToyEnv4_1a
 
 
 def compute_true_q_values(
@@ -154,19 +156,19 @@ def main():
     print("-" * 80)
 
     # Create environment
-    env = DiscreteToyEnv1_1a()
+    env = DiscreteToyEnv4_1a()
     print(f"Environment: {env.__class__.__name__}")
     print(f"  States: {env.spec.observation_space.n}")
     print(f"  Leader actions: {env.spec.leader_action_space.n}")
     print(f"  Follower actions: {env.spec.action_space.n}")
-    print("  Discount: 0.99")
+    print("  Discount: 0.8")
     print("  Temperature: 1.0")
     print("-" * 80)
 
     # Compute true Q-values
     Q_true = compute_true_q_values(
         env,
-        discount=0.99,
+        discount=0.8,
         temperature=1.0,
         max_iterations=2000,
         tolerance=1e-5,
@@ -178,7 +180,6 @@ def main():
 
     # Save to file
     output_file = "true_q_values.pkl"
-    import pickle
 
     with open(output_file, "wb") as f:
         pickle.dump(Q_true, f)
