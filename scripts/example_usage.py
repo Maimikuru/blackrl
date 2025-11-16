@@ -2,7 +2,7 @@
 
 import numpy as np
 from blackrl.agents.follower import MDCEIRL, SoftQLearning
-from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.envs import DiscreteToyEnvPaper
 from blackrl.policies import JointPolicy
 
 
@@ -10,7 +10,7 @@ def example_environment():
     """Example: Using the discrete toy environment."""
     print("=== Example: Environment Usage ===")
 
-    env = DiscreteToyEnv1_1a()
+    env = DiscreteToyEnvPaper()
     print(f"Environment: {env.__class__.__name__}")
     print(f"Observation space: {env.observation_space}")
     print(f"Action space: {env.action_space}")
@@ -62,7 +62,7 @@ def example_soft_q_learning():
     """Example: Using Soft Q-Learning."""
     print("=== Example: Soft Q-Learning ===")
 
-    env = DiscreteToyEnv1_1a()
+    env = DiscreteToyEnvPaper()
 
     # Simple reward function
     def reward_fn(state, leader_action, follower_action):
@@ -100,7 +100,7 @@ def example_joint_policy():
     """Example: Using Joint Policy."""
     print("=== Example: Joint Policy ===")
 
-    env = DiscreteToyEnv1_1a()
+    env = DiscreteToyEnvPaper()
 
     # Simple leader policy
     def leader_policy(obs, deterministic=False):

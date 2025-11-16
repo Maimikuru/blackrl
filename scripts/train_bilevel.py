@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from blackrl.algos import BilevelRL
-from blackrl.envs import DiscreteToyEnv1_1a
+from blackrl.envs import DiscreteToyEnvPaper
 from plot_learning_curves import plot_learning_curves
 
 
@@ -43,7 +43,7 @@ def main():
     print("Initializing Bi-level RL training...")
 
     # Create environment
-    env = DiscreteToyEnv1_1a()
+    env = DiscreteToyEnvPaper()
     print(f"Environment: {env.__class__.__name__}")
 
     # Create leader policy (initial uniform distribution)

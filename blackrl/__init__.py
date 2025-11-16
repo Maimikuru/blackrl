@@ -6,8 +6,7 @@ from blackrl.algos import BilevelRL
 
 # Import main modules
 from blackrl.envs import (
-    DiscreteToyEnv1_1a,
-    DiscreteToyEnv1_2a,
+    DiscreteToyEnvPaper,
     Environment,
     EnvSpec,
     EnvStep,
@@ -28,8 +27,7 @@ __all__ = [
     "BilevelRL",
     "ContinuousQFunction",
     "DiscreteQFunction",
-    "DiscreteToyEnv1_1a",
-    "DiscreteToyEnv1_2a",
+    "DiscreteToyEnvPaper",
     "EnvSpec",
     "EnvStep",
     "Environment",
