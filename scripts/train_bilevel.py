@@ -38,6 +38,22 @@ def create_simple_leader_policy(env_spec):
     return leader_policy
 
 
+# def create_simple_leader_policy():
+#     """Initial uniform leader policy for exploration.
+
+#     Args:
+#         observation: Current observation (state)
+#         deterministic: Whether to use deterministic policy
+
+#     Returns:
+#         Leader action probabilities (uniformly random: [0.5, 0.5])
+
+#     """
+#     # Uniform distribution (50% action 0, 50% action 1)
+#     # Will be updated to tabular policy during training
+#     return [0.5, 0.5]
+
+
 def main():
     """Main training function."""
     print("Initializing Bi-level RL training...")
@@ -89,10 +105,10 @@ def main():
         learning_rate_leader=1e-4,
         learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
         mdce_irl_config={
-            "max_iterations": 100,
-            "tolerance": 0.1,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
-            "n_soft_q_iterations": 500,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 1000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "max_iterations": 1000,
+            "tolerance": 0.025,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
+            "n_soft_q_iterations": 1000,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 5000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={

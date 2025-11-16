@@ -695,13 +695,13 @@ class BilevelRL:
             if verbose and (irl_iteration % 10 == 0 or irl_iteration < 5):
                 self._display_softq_stats(temp_soft_q_learning, irl_iteration)
 
-                # Display Q-value convergence statistics
-                print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning Convergence ---")
-                print(f"  Max Q-value change: {final_max_q_change:.6f}")
-                if len(q_change_history) > 0:
-                    print("  Q-value change history (every 10 episodes):")
-                    for ep, change in q_change_history:
-                        print(f"    Episode {ep:3d}: max_Δ_Q = {change:.6f}")
+                # # Display Q-value convergence statistics
+                # print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning Convergence ---")
+                # print(f"  Max Q-value change: {final_max_q_change:.6f}")
+                # if len(q_change_history) > 0:
+                #     print("  Q-value change history (every 10 episodes):")
+                #     for ep, change in q_change_history:
+                #         print(f"    Episode {ep:3d}: max_Δ_Q = {change:.6f}")
 
                 # Display estimated rewards for all (s,a,b) combinations
                 print(f"\n--- IRL iteration {irl_iteration}: Estimated Rewards r_F(s,a,b) = w^T φ ---")
@@ -1575,6 +1575,7 @@ class BilevelRL:
         n_episodes_per_iteration: int = 50,
         n_critic_updates: int = 100,
         replay_buffer_size: int = 10000,
+        mdce_irl_frequency: int = 10,
         verbose: bool = True,
     ):
         """Train the bi-level RL algorithm.
@@ -1589,12 +1590,12 @@ class BilevelRL:
 
         Args:
             env: Environment instance
-            expert_trajectories: Expert trajectories for IRL
             n_leader_iterations: Number of leader policy update iterations
             n_follower_iterations: Number of follower Q-learning iterations
             n_episodes_per_iteration: Number of episodes to collect per iteration
             n_critic_updates: Number of Q-learning updates per iteration
             replay_buffer_size: Size of replay buffer
+            mdce_irl_frequency: Frequency of MDCE IRL execution (every N iterations, default: 10)
             verbose: Whether to print progress
 
         """
@@ -1785,27 +1786,38 @@ class BilevelRL:
             #   - Compute current policy FEV φ̄_{g_{w^n}}^{γ_F}
             #   - If converged: Return w^n, g_{w^n}
             #   - Update: w^n ← w^n + δ(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
+            #
+            # Note: 報酬関数が固定のため、MDCE IRLは数回のイテレーションに1回だけ実行すれば良い
 
-            # Generate expert trajectories with current leader policy
-            # (Follower's optimal response to current leader)
-            if verbose:
-                print("Step 2: Generating expert trajectories with current leader policy...")
-            current_expert_trajectories = self._generate_expert_trajectories(
-                env,
-                n_trajectories=n_episodes_per_iteration,
-                verbose=verbose,
-            )
+            # Execute MDCE IRL only every mdce_irl_frequency iterations
+            # should_run_mdce_irl = (iteration == 0) or (iteration % mdce_irl_frequency == 0)
+            should_run_mdce_irl = iteration == 0
 
-            if verbose:
-                print("Step 2: Leader estimates follower's reward function using MDCE IRL...")
+            if should_run_mdce_irl:
+                # Generate expert trajectories with current leader policy
+                # (Follower's optimal response to current leader)
+                if verbose:
+                    print("Step 2: Generating expert trajectories with current leader policy...")
+                current_expert_trajectories = self._generate_expert_trajectories(
+                    env,
+                    n_trajectories=n_episodes_per_iteration,
+                    verbose=verbose,
+                )
 
-            # MDCE IRL uses current expert demonstration trajectories
-            # This estimates follower's reward function and updates self.soft_q_learning with g_{w^n}
-            self.estimate_follower_reward(current_expert_trajectories, env, verbose=verbose)
+                if verbose:
+                    print("Step 2: Leader estimates follower's reward function using MDCE IRL...")
 
-            # Note: MDCE IRLで推定された方策 g_{w^n} は self.soft_q_learning に保存され、
-            # Step 3（Critic更新）とStep 4（勾配計算）で使用される
-            # フォロワー自身は次のイテレーションのStep 0で真の報酬を使って再学習する
+                # MDCE IRL uses current expert demonstration trajectories
+                # This estimates follower's reward function and updates self.soft_q_learning with g_{w^n}
+                self.estimate_follower_reward(current_expert_trajectories, env, verbose=verbose)
+
+                # Note: MDCE IRLで推定された方策 g_{w^n} は self.soft_q_learning に保存され、
+                # Step 3（Critic更新）とStep 4（勾配計算）で使用される
+                # フォロワー自身は次のイテレーションのStep 0で真の報酬を使って再学習する
+            elif verbose:
+                print(
+                    f"Step 2: Skipping MDCE IRL (runs every {mdce_irl_frequency} iterations, next at iteration {((iteration // mdce_irl_frequency) + 1) * mdce_irl_frequency})",
+                )
 
             # Step 3: Update leader's Critic (Q-table)
             if replay_buffer._current_size > 0:
