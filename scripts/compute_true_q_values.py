@@ -11,7 +11,7 @@ import pickle
 
 import numpy as np
 import torch
-from blackrl.envs import DiscreteToyEnv4_1a
+from blackrl.envs import DiscreteToyEnvPaper
 
 
 def compute_true_q_values(
@@ -156,7 +156,7 @@ def main():
     print("-" * 80)
 
     # Create environment
-    env = DiscreteToyEnv4_1a()
+    env = DiscreteToyEnvPaper()
     print(f"Environment: {env.__class__.__name__}")
     print(f"  States: {env.spec.observation_space.n}")
     print(f"  Leader actions: {env.spec.leader_action_space.n}")
@@ -170,8 +170,8 @@ def main():
         env,
         discount=0.8,
         temperature=1.0,
-        max_iterations=2000,
-        tolerance=1e-5,
+        max_iterations=100000000000,
+        tolerance=1e-15,
         verbose=True,
     )
 
