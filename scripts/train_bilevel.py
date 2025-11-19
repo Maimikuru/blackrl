@@ -9,51 +9,6 @@ from blackrl.envs import DiscreteToyEnvPaper
 from plot_learning_curves import plot_learning_curves
 
 
-def create_simple_leader_policy(env_spec):
-    """Create a simple leader policy.
-
-    Args:
-        env_spec: Environment specification
-
-    Returns:
-        Leader policy function
-
-    """
-
-    def leader_policy(observation, deterministic=False):
-        """Initial uniform leader policy for exploration.
-
-        Args:
-            observation: Current observation (state)
-            deterministic: Whether to use deterministic policy
-
-        Returns:
-            Leader action (uniformly random)
-
-        """
-        # Uniform distribution (50% action 0, 50% action 1)
-        # Will be updated to tabular policy during training
-        return [0.5, 0.5]
-
-    return leader_policy
-
-
-# def create_simple_leader_policy():
-#     """Initial uniform leader policy for exploration.
-
-#     Args:
-#         observation: Current observation (state)
-#         deterministic: Whether to use deterministic policy
-
-#     Returns:
-#         Leader action probabilities (uniformly random: [0.5, 0.5])
-
-#     """
-#     # Uniform distribution (50% action 0, 50% action 1)
-#     # Will be updated to tabular policy during training
-#     return [0.5, 0.5]
-
-
 def main():
     """Main training function."""
     print("Initializing Bi-level RL training...")
@@ -62,9 +17,8 @@ def main():
     env = DiscreteToyEnvPaper()
     print(f"Environment: {env.__class__.__name__}")
 
-    # Create leader policy (initial uniform distribution)
-    leader_policy = create_simple_leader_policy(env.spec)
-    print("Leader policy created (uniform distribution)")
+    # Leader policy will be automatically initialized as tabular policy during training
+    # No need to define initial policy here
 
     # Note: Expert trajectories are generated dynamically during training
     # using the current leader policy at each iteration
@@ -98,17 +52,16 @@ def main():
     print("Initializing Bi-level RL algorithm...")
     algo = BilevelRL(
         env_spec=env.spec,
-        leader_policy=leader_policy,
-        reward_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
+        feature_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
         discount_follower=0.8,  # RESTORED: 0.8 changes the problem definition
         learning_rate_leader=1e-4,
         learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
         mdce_irl_config={
-            "max_iterations": 1000,
+            "max_iterations": 5000,
             "tolerance": 0.025,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
-            "n_soft_q_iterations": 1000,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 5000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_soft_q_iterations": 5000,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 100,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={
@@ -124,8 +77,9 @@ def main():
     print("Starting training...")
     stats = algo.train(
         env=env,
-        n_leader_iterations=100,
-        n_follower_iterations=500,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
+        n_leader_iterations=1000,
+        n_follower_iterations=500,
+        n_episodes_per_iteration=10,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
         verbose=True,
     )
 

@@ -157,15 +157,20 @@ class GammaReplayBuffer(ReplayBufferBase):
             numpy.ndarray: The indices to store transitions at
 
         """
-        if self._current_ptr + size_increment < self._size:
+        # Ensure current_ptr is within bounds (circular buffer)
+        self._current_ptr = self._current_ptr % self._size
+
+        if self._current_ptr + size_increment <= self._size:
             idx = np.arange(self._current_ptr, self._current_ptr + size_increment)
-            self._current_ptr += size_increment
+            self._current_ptr = (self._current_ptr + size_increment) % self._size
         else:
-            overflow = size_increment - (self._size - self._current_ptr)
+            # Wrap around: need to split across buffer boundary
+            remaining = self._size - self._current_ptr
+            overflow = size_increment - remaining
             idx_a = np.arange(self._current_ptr, self._size)
             idx_b = np.arange(0, overflow)
             idx = np.concatenate([idx_a, idx_b])
-            self._current_ptr = overflow
+            self._current_ptr = overflow % self._size
 
         # Update replay size
         self._current_size = min(self._size, self._current_size + size_increment)

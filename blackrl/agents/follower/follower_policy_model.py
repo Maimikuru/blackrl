@@ -54,7 +54,11 @@ class FollowerPolicyModel:
         """
         self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
         for (s, a, b), q_val in q_values.items():
-            self.Q[s][a][b] = q_val
+            # Convert keys to match get_q_value's key format
+            state_key = self._state_to_key(s)
+            leader_key = self._action_to_key(a)
+            follower_key = self._action_to_key(b)
+            self.Q[state_key][leader_key][follower_key] = q_val
 
     def get_q_value(
         self,
