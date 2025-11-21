@@ -716,7 +716,24 @@ class BilevelRL:
 
         """
         # Compute expert FEV from demonstration trajectories
-        expert_fev = self.mdce_irl.compute_expert_fev(trajectories)
+        def expert_policy_fn(state, leader_action, follower_action=None):
+            """Expert policy wrapper for compute_policy_fev."""
+            # compute_policy_fev は (state, leader_action) を引数に行動を要求する
+            if follower_action is None:
+                if self.follower_policy_model is None:
+                     # モデルがない場合はランダム (通常ここは通らないはず)
+                     return self.env_spec.action_space.sample()
+                return self.follower_policy_model.sample_action(state, leader_action)
+
+            # (必要であれば) 確率計算用
+            return 0.0
+
+        # 2. 現在の方策FEVと同じ「compute_policy_fev」を使って計算
+        expert_fev = self.mdce_irl.compute_policy_fev(
+            policy=expert_policy_fn,
+            leader_policy=self.leader_policy,
+            env=env,
+        )
 
         if verbose:
             print(f"Expert FEV: {expert_fev}")
@@ -1581,21 +1598,11 @@ class BilevelRL:
         }
 
     def _update_leader_actor(self, gradient_info):
-        """Update leader's policy using estimated gradient.
-
-        For tabular policy:
-        π_L^{n+1}[s, a] ← π_L^n[s, a] + α_L * ∇_{π_L[s, a]} J_L(θ_L^n)
-
-        Then normalize to ensure it's a valid probability distribution.
-
-        Args:
-            gradient_info: Dictionary with gradient information from _estimate_leader_gradient
-
-        """
+        """Update leader's policy using estimated gradient."""
         if gradient_info is None:
             return
 
-        # Log gradient information
+        # Log gradient information (既存のログ処理)
         self.stats.setdefault("gradient_norm", []).append(
             gradient_info.get("gradient_norm", 0.0),
         )
@@ -1607,10 +1614,42 @@ class BilevelRL:
         )
 
         # Update tabular policy if available
-        if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
+        if self._use_tabular_policy and self.leader_policy_table is not None:
             policy_gradients = gradient_info.get("policy_gradients")
+
             if policy_gradients is not None:
-                self.leader_policy_obj.update(policy_gradients, self.learning_rate_leader)
+                # === [追加] 勾配クリッピング (Clip by Global Norm) ===
+                # 勾配全体のL2ノルムを計算
+                total_norm = np.linalg.norm(policy_gradients)
+                max_grad_norm = 1.0  # 許容する最大ノルム (調整パラメータ)
+
+                # ノルムが上限を超えていたら、スケーリングして縮小する
+                if total_norm > max_grad_norm:
+                    clip_coef = max_grad_norm / (total_norm + 1e-6)
+                    # 勾配を上書きして縮小する
+                    policy_gradients = policy_gradients * clip_coef
+
+                    # (デバッグ用) ログ出力
+                    # print(f"Gradient clipped: {total_norm:.2f} -> {max_grad_norm}")
+                # ===================================================
+
+                # Update policy: π_L^{n+1} ← π_L^n + α_L * ∇_{π_L} J_L
+                # ※ ここは元のまま（確率の直接更新）
+                self.leader_policy_table = self.leader_policy_table + self.learning_rate_leader * policy_gradients
+
+                # Normalize to ensure valid probability distribution
+                # Add small epsilon to avoid numerical issues
+                self.leader_policy_table = np.maximum(self.leader_policy_table, 1e-8)
+
+                # Normalize per state
+                for state in range(self.leader_policy_table.shape[0]):
+                    state_sum = np.sum(self.leader_policy_table[state])
+                    if state_sum > 0:
+                        self.leader_policy_table[state] = self.leader_policy_table[state] / state_sum
+                    else:
+                        # If all probabilities are zero or negative, reset to uniform
+                        num_actions = self.leader_policy_table.shape[1]
+                        self.leader_policy_table[state] = np.ones(num_actions) / num_actions
 
     def train(
         self,
