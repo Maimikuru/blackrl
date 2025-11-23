@@ -213,6 +213,8 @@ class BilevelRL:
         discount_leader: float = 0.99,
         discount_follower: float = 0.99,
         learning_rate_leader: float = 1e-3,
+        learning_rate_leader_critic: float | None = None,
+        learning_rate_leader_actor: float | None = None,
         learning_rate_follower: float = 1e-3,
         mdce_irl_config: dict | None = None,
         soft_q_config: dict | None = None,
@@ -222,8 +224,15 @@ class BilevelRL:
         self.feature_fn = feature_fn
         self.discount_leader = discount_leader
         self.discount_follower = discount_follower
-        self.learning_rate_leader = learning_rate_leader
+
+        # Set separate learning rates, falling back to learning_rate_leader if not specified
+        self.learning_rate_leader_critic = learning_rate_leader_critic if learning_rate_leader_critic is not None else learning_rate_leader
+        self.learning_rate_leader_actor = learning_rate_leader_actor if learning_rate_leader_actor is not None else learning_rate_leader
+
         self.learning_rate_follower = learning_rate_follower
+
+        self.leader_policy_table: np.ndarray | None = None
+        self._use_tabular_policy = False
 
         # Initialize Leader Policy
         # If leader_policy is None, create a default uniform policy
@@ -708,6 +717,7 @@ class BilevelRL:
 
         Args:
             trajectories: List of trajectories (observed follower behaviors)
+                          Note: Only used for likelihood calculation logging.
             env: Environment instance
             verbose: Whether to print progress
 
@@ -715,20 +725,25 @@ class BilevelRL:
             Estimated reward parameters w (for leader's understanding of follower)
 
         """
-        # Compute expert FEV from demonstration trajectories
+        # === [修正: Apples-to-Apples化] ===
+        # エキスパートFEVも、現在の方策FEVと同じ「モンテカルロ法」で計算します。
+        # Step 0で学習した「真の最適反応 (self.soft_q_learning)」を使用します。
+
+        # 1. エキスパート方策のラッパー関数を定義
         def expert_policy_fn(state, leader_action, follower_action=None):
             """Expert policy wrapper for compute_policy_fev."""
-            # compute_policy_fev は (state, leader_action) を引数に行動を要求する
             if follower_action is None:
-                if self.follower_policy_model is None:
-                     # モデルがない場合はランダム (通常ここは通らないはず)
-                     return self.env_spec.action_space.sample()
-                return self.follower_policy_model.sample_action(state, leader_action)
-
-            # (必要であれば) 確率計算用
+                # Step 0で学習済みのモデルからサンプリング
+                if self.soft_q_learning is not None:
+                    return self.soft_q_learning.sample_action(state, leader_action)
+                # フォールバック (通常は発生しない)
+                return self.env_spec.action_space.sample()
             return 0.0
 
-        # 2. 現在の方策FEVと同じ「compute_policy_fev」を使って計算
+        if verbose:
+            print("Computing Expert FEV using Monte Carlo simulation (Apples-to-Apples)...")
+
+        # 2. 現在の方策FEVと同じ関数(compute_policy_fev)を使ってExpert FEVを計算
         expert_fev = self.mdce_irl.compute_policy_fev(
             policy=expert_policy_fn,
             leader_policy=self.leader_policy,
@@ -789,10 +804,7 @@ class BilevelRL:
             )
 
             # Train Q-function using Soft Q-Learning
-            # Use fewer iterations for each IRL step to speed up
-            # n_soft_q_iterations = int(min(100, max(1, self.learning_rate_follower * 1000)))
             n_soft_q_iterations = self.mdce_irl.n_soft_q_iterations
-            # Adjust as needed
             soft_q_start_time = time.time()
 
             # Save initial Q-values to track convergence
@@ -804,7 +816,7 @@ class BilevelRL:
                     for b_key in temp_soft_q_learning.Q[s_key][a_key]:
                         initial_q_values[s_key][a_key][b_key] = temp_soft_q_learning.Q[s_key][a_key][b_key]
 
-            # Track Q-value updates per iteration (every 10 episodes)
+            # Track Q-value updates
             q_change_history = []
 
             for episode_idx in range(n_soft_q_iterations):
@@ -820,7 +832,6 @@ class BilevelRL:
                     env_step = env.step(leader_act, follower_act)
 
                     # CRITICAL: Use estimated reward function (not environment reward!)
-                    # In MDCE IRL, we reconstruct Q_F using r_F(s, a, b) = w^T φ(s, a, b)
                     reward = reward_fn(obs, leader_act, follower_act)
 
                     # Update Q-function with estimated reward
@@ -828,7 +839,7 @@ class BilevelRL:
                         obs,
                         leader_act,
                         follower_act,
-                        reward,  # Estimated reward from w^T φ
+                        reward,
                         env_step.observation,
                         env_step.last,
                     )
@@ -866,19 +877,12 @@ class BilevelRL:
                 """Create policy function with captured Soft Q-Learning instance."""
 
                 def policy_fn(state, leader_action, follower_action=None):
-                    """Follower policy function from Soft Q-Learning.
-
-                    If follower_action is None, sample an action (for compute_policy_fev).
-                    Otherwise, return log probability (for compute_discounted_causal_likelihood).
-                    """
                     if follower_action is None:
                         # Sample action (for compute_policy_fev)
                         return sq_instance.sample_action(state, leader_action)
-                    # Return log probability (for compute_discounted_causal_likelihood)
-                    # Compute soft value and Q-value
+                    # Return log probability
                     q_val = sq_instance.get_q_value(state, leader_action, follower_action)
                     soft_value = sq_instance.compute_soft_value(state, leader_action)
-                    # Log probability: log g(b|s,a) = (Q(s,a,b) - V^soft(s,a)) / temperature
                     log_prob = (q_val - soft_value) / sq_instance.temperature
                     return log_prob
 
@@ -886,48 +890,10 @@ class BilevelRL:
 
             policy_fn = make_policy_fn(temp_soft_q_learning)
 
-            # Display Q-values after Soft Q-Learning (for debugging convergence)
-            # Show every iteration for better progress visibility
+            # Display debug info
             if verbose and (irl_iteration % 10 == 0 or irl_iteration < 5):
                 self._display_softq_stats(temp_soft_q_learning, irl_iteration)
-
-                # # Display Q-value convergence statistics
-                # print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning Convergence ---")
-                # print(f"  Max Q-value change: {final_max_q_change:.6f}")
-                # if len(q_change_history) > 0:
-                #     print("  Q-value change history (every 10 episodes):")
-                #     for ep, change in q_change_history:
-                #         print(f"    Episode {ep:3d}: max_Δ_Q = {change:.6f}")
-
-                # Display estimated rewards for all (s,a,b) combinations
-                print(f"\n--- IRL iteration {irl_iteration}: Estimated Rewards r_F(s,a,b) = w^T φ ---")
-                for s in range(3):  # States 0, 1, 2
-                    print(f"  State {s}:")
-                    for a in range(2):  # Leader actions 0, 1
-                        rewards_str = "  ".join([f"b={b}: {reward_fn(s, a, b):6.3f}" for b in range(3)])
-                        print(f"    Leader a={a}: {rewards_str}")
-
-                # Display learned policy from temp_soft_q_learning
-                print(f"\n--- IRL iteration {irl_iteration}: Learned Follower Policy π_F(b|s,a) ---")
-                for s in range(3):
-                    print(f"  State {s}:")
-                    for a in range(2):
-                        # Get action probabilities
-                        probs = []
-                        q_vals = []
-                        for b in range(3):
-                            q_val = temp_soft_q_learning.get_q_value(s, a, b)
-                            q_vals.append(q_val)
-
-                        # Compute softmax probabilities
-                        q_tensor = torch.tensor(q_vals)
-                        probs_tensor = torch.softmax(q_tensor / temp_soft_q_learning.temperature, dim=0)
-                        probs = probs_tensor.detach().cpu().numpy()
-
-                        prob_str = "  ".join([f"π(b={b})={probs[b]:.3f}" for b in range(3)])
-                        q_str = "  ".join([f"Q(s,a,{b})={q_vals[b]:6.2f}" for b in range(3)])
-                        print(f"    Leader a={a}: {prob_str}")
-                        print(f"              Q: {q_str}")
+                # ... (rewards display omitted for brevity) ...
 
             # Step 2.3: Compute current policy FEV φ̄_{g_{w^n}}^{γ_F}
             fev_start_time = time.time()
@@ -942,41 +908,26 @@ class BilevelRL:
             # Compute gradient: ∇L(w) ∝ φ̄_expert^γ - φ̄_{g_w}^γ
             gradient = expert_fev - policy_fev
 
-            # Log timing information (every 10 iterations to reduce clutter)
             if verbose and irl_iteration % 10 == 0:
                 print(f"\n--- IRL iteration {irl_iteration}: Timing ---")
                 print(f"  Soft Q-Learning: {soft_q_time:.2f}s ({n_soft_q_iterations} episodes)")
                 print(f"  Policy FEV computation: {fev_time:.2f}s ({self.mdce_irl.n_monte_carlo_samples} samples)")
                 print(f"  Total per iteration: {soft_q_time + fev_time:.2f}s")
 
-            # Update w: w^n ← w^n + α(n)(φ̄_expert^{γ_F} - φ̄_{g_{w^n}}^{γ_F})
-            # Learning rate schedule: α(n) = 0.1 / (1.0 + 0.01*n)
-            # Slower decay: n=0→0.1, n=10→0.091, n=100→0.05, n=1000→0.009
+            # Update w with learning rate schedule
             learning_rate_schedule = 0.1 / (1.0 + 0.01 * irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + learning_rate_schedule * gradient
 
             # Step 2.5: Check convergence using FEM constraint
-            # δ_FEM(f, f') = max_k |f_k - f'_k| / |f'_k|
-            # δ_FEM(policy_fev, expert_fev) where f' = expert_fev (denominator)
-            #
-            # IMPORTANT: Only compute relative error for features that appear in expert trajectories
-            # For features with zero expert FEV (e.g., unreachable states), use absolute error instead
             epsilon = 1e-8
             mask = torch.abs(expert_fev) > epsilon  # True for non-zero expert features
-
-            # Relative error for non-zero expert features
             relative_errors = torch.abs(gradient) / (torch.abs(expert_fev) + epsilon)
-
-            # Absolute error for zero expert features (to detect policy deviation)
             absolute_errors = torch.abs(gradient)
-
-            # Use relative error where expert_fev > 0, absolute error otherwise
             errors = torch.where(mask, relative_errors, absolute_errors)
             delta_fem = torch.max(errors).item()
             max_error_idx = torch.argmax(errors).item()
 
             # CRITICAL: Update self.soft_q_learning with estimated reward-based policy
-            # This is g_{w^n} that will be used in Steps 3-5 for leader optimization
             self.soft_q_learning = temp_soft_q_learning
 
             if delta_fem < self.mdce_irl.tolerance:
@@ -984,48 +935,26 @@ class BilevelRL:
                     print(f"MDCE IRL converged at iteration {irl_iteration}: δ_FEM={delta_fem:.6f}")
                 break
 
-            # Log IRL metrics (also log delta_fem for monitoring)
+            # Log IRL metrics
             gradient_norm = torch.norm(gradient).item()
             self.stats["irl_gradient_norm"].append(gradient_norm)
             self.stats.setdefault("irl_delta_fem", []).append(delta_fem)
 
             if verbose and irl_iteration % 10 == 0:
+                # Likelihood calculation (for logging only)
                 likelihood = self.mdce_irl.compute_likelihood(trajectories, policy_fn)
                 self.stats["irl_likelihood"].append((irl_iteration, likelihood))
 
-                # Display FEV comparison
                 print(
                     f"IRL iteration {irl_iteration}: δ_FEM={delta_fem:.6f}, ||gradient||={gradient_norm:.6f}, likelihood={likelihood:.6f}",
                 )
                 print(f"  Expert FEV:  {expert_fev.detach().cpu().numpy()}")
                 print(f"  Policy FEV:  {policy_fev.detach().cpu().numpy()}")
 
-                # Show which features are masked (zero in expert FEV)
-                mask_np = mask.detach().cpu().numpy()
-                zero_features = [i for i, m in enumerate(mask_np) if not m]
-                if zero_features:
-                    print(f"  Zero expert features (using absolute error): {zero_features}")
-
-                # Show error at max_error_idx
-                is_relative = mask[max_error_idx].item()
-                error_type = "relative" if is_relative else "absolute"
-                print(
-                    f"  Max error at feature {max_error_idx} ({error_type}): expert={expert_fev[max_error_idx]:.4f}, policy={policy_fev[max_error_idx]:.4f}, error={errors[max_error_idx]:.4f}",
-                )
-                # Display estimated reward parameters
                 w_norm = torch.norm(self.mdce_irl.w).item()
                 w_np = self.mdce_irl.w.detach().cpu().numpy()
                 print(f"  Reward params w (||w||={w_norm:.4f}):")
                 print(f"    w = {w_np}")
-                # Interpret w for one-hot features: [s0, s1, s2, a0, a1, b0, b1, b2]
-                if len(w_np) == 8:
-                    print(f"    State weights:    [s0={w_np[0]:.3f}, s1={w_np[1]:.3f}, s2={w_np[2]:.3f}]")
-                    print(f"    Leader weights:   [a0={w_np[3]:.3f}, a1={w_np[4]:.3f}]")
-                    print(f"    Follower weights: [b0={w_np[5]:.3f}, b1={w_np[6]:.3f}, b2={w_np[7]:.3f}]")
-                    # Example reward calculation: r_F(s,a,b) = w^T φ(s,a,b)
-                    # For (s=0, a=0, b=2): φ = [1,0,0,1,0,0,0,1] → r = w[0]+w[3]+w[7]
-                    example_reward = w_np[0] + w_np[3] + w_np[7]
-                    print(f"    Example: r_F(s=0,a=0,b=2) = w[0]+w[3]+w[7] = {example_reward:.3f}")
 
         return self.mdce_irl.w
 
@@ -1415,7 +1344,7 @@ class BilevelRL:
                 follower_act = follower_acts[i]
 
                 current_q = self.leader_q_table[state, leader_act, follower_act]
-                self.leader_q_table[state, leader_act, follower_act] = current_q + self.learning_rate_leader * (
+                self.leader_q_table[state, leader_act, follower_act] = current_q + self.learning_rate_leader_critic * (
                     target_q_values[i] - current_q
                 )
 

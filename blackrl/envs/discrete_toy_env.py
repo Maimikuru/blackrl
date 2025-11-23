@@ -45,7 +45,7 @@ class DiscreteToyEnvBase(Environment):
         self.costs = np.zeros((3, 2))
 
         # Episode length
-        self._max_episode_steps = 100
+        self._max_episode_steps = 150
 
         # Optimal follower action table: opt_follower_action_table[leader_action][state][follower_action]
         # Value 1 indicates optimal action, 0 indicates non-optimal
