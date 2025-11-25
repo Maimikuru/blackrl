@@ -228,32 +228,26 @@ class BilevelRL:
         # Set separate learning rates, falling back to learning_rate_leader if not specified
         self.learning_rate_leader_critic = learning_rate_leader_critic if learning_rate_leader_critic is not None else learning_rate_leader
         self.learning_rate_leader_actor = learning_rate_leader_actor if learning_rate_leader_actor is not None else learning_rate_leader
-
         self.learning_rate_follower = learning_rate_follower
-
         self.leader_policy_table: np.ndarray | None = None
         self._use_tabular_policy = False
 
         # Initialize Leader Policy
-        # If leader_policy is None, create a default uniform policy
         if leader_policy is None:
-
             def default_leader_policy(observation, deterministic=False):
                 """Default uniform leader policy for initial exploration."""
                 num_actions = env_spec.leader_action_space.n if hasattr(env_spec.leader_action_space, "n") else 2
                 if deterministic:
                     return 0
                 return int(np.random.choice(num_actions))
-
             leader_policy = default_leader_policy
 
         # Keep leader_policy as Callable for backward compatibility
         self.leader_policy = leader_policy
-
         self.leader_policy_obj = LeaderPolicy(
             env_spec=env_spec,
             policy=leader_policy,
-            use_tabular=False,  # Will be initialized in train if needed
+            use_tabular=False,
         )
 
         # Initialize MDCE IRL
@@ -264,19 +258,56 @@ class BilevelRL:
             **mdce_config,
         )
 
-        # Initialize Soft Q-Learning or FollowerPolicyModel (will be set up after reward estimation)
-        # SoftQLearning is used for Q-learning updates, FollowerPolicyModel is used for pre-computed Q-values
+        # Initialize Soft Q-Learning
         self.soft_q_learning: SoftQLearning | FollowerPolicyModel | None = None
         self.soft_q_config = soft_q_config or {}
 
-        # Leader's Q-table (Q_L[s, a, b])
+        # === [追加] 真のフォロワーモデルを保持する変数を初期化 ===
+        self.true_follower_model = None
+        # =====================================================
+
+        # Leader's Q-table
         self.leader_q_table: np.ndarray | None = None
+
+        # Leader's tabular policy
+        self.leader_policy_table: np.ndarray | None = None
+        self._use_tabular_policy = False
+        self.leader_logits_table: np.ndarray | None = None
 
         # Statistics
         self.stats = defaultdict(list)
-
-        # Cache for true Q-values (computed only once per environment)
         self._cached_true_q_values = None
+
+    def _log_leader_state(self, iteration):
+        """Log Leader's Q-values and Policy probabilities."""
+        print(f"\n--- Leader State at Iteration {iteration} ---")
+
+        if self.leader_q_table is None:
+            return
+
+        num_states = self.leader_q_table.shape[0]
+        num_leader_actions = self.leader_q_table.shape[1]
+        num_follower_actions = self.leader_q_table.shape[2]
+
+        for s in range(num_states):
+            print(f"State {s}:")
+            # 1. 方策確率の表示
+            if self._use_tabular_policy and self.leader_policy_table is not None:
+                probs = self.leader_policy_table[s]
+                probs_str = "  ".join([f"P(a={a})={p:.4f}" for a, p in enumerate(probs)])
+                print(f"  Policy: {probs_str}")
+
+            # 2. Q値の表示
+            for a in range(num_leader_actions):
+                # Q_L(s, a, b) の表示
+                q_str = "  ".join([f"Q(b={b})={self.leader_q_table[s, a, b]:.4f}" for b in range(num_follower_actions)])
+
+                # (参考) フォロワーの反応を考慮した期待Q値
+                follower_probs = self._get_follower_action_probs(s, a)
+                expected_q = np.sum(follower_probs * self.leader_q_table[s, a])
+
+                print(f"  Action a={a}: E[Q]={expected_q:.4f} | Details: [{q_str}]")
+        print("-" * 60)
 
     def _default_feature_fn(self, state, leader_action, follower_action):
         """Default feature function (identity).
@@ -1200,41 +1231,53 @@ class BilevelRL:
     def evaluate_leader(
         self,
         env,
+        follower_policy_fn: Callable,  # 対戦相手（フォロワー）の方策関数
         n_episodes: int = 10,
     ) -> dict[str, float]:
-        """Evaluate leader's performance (Discounted & Undiscounted)."""
-        total_objectives = []  # Discounted (目的関数値)
-        total_returns = []     # Undiscounted (累積報酬)
+        """Evaluate leader's performance against a specific follower policy.
+
+        Args:
+            env: Environment instance
+            follower_policy_fn: Policy function to use for the follower
+            n_episodes: Number of episodes to evaluate
+
+        Returns:
+            Dictionary with mean and std of returns
+        """
+        # 一時的にクラスのフォロワー方策を、指定されたもの（True or Learned）に差し替える
+        # get_joint_action が self.follower_policy を参照するため
+        original_policy = self.follower_policy
+        self.follower_policy = follower_policy_fn
+
+        total_returns = []
 
         for _ in range(n_episodes):
             obs, _ = env.reset()
-            episode_objective = 0.0
             episode_return = 0.0
-            discount_factor = 1.0
 
             while True:
-                leader_act, follower_act = self.get_joint_action(obs)
+                # 指定されたフォロワーを使って行動決定
+                # ※ deterministic=False (確率的) で評価するのが基本
+                leader_act, follower_act = self.get_joint_action(obs, deterministic=False)
+
                 env_step = env.step(leader_act, follower_act)
 
-                # リーダーの報酬を取得
+                # リーダーの累積報酬 (Raw Score) を集計
                 leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
+                episode_return += leader_reward
 
-                # 両方を計算
-                episode_objective += discount_factor * leader_reward  # 割引あり
-                episode_return += leader_reward                       # 割引なし (Raw Score)
-
-                discount_factor *= self.discount_leader
                 obs = env_step.observation
-
                 if env_step.last:
                     break
 
-            total_objectives.append(episode_objective)
             total_returns.append(episode_return)
 
+        # 元に戻す
+        self.follower_policy = original_policy
+
         return {
-            "objective": np.mean(total_objectives),
-            "return": np.mean(total_returns),
+            "mean": np.mean(total_returns),
+            "std": np.std(total_returns),
         }
 
     def compute_leader_objective(
@@ -1695,15 +1738,12 @@ class BilevelRL:
         replay_buffer = GammaReplayBuffer(size=replay_buffer_size, gamma=self.discount_leader)
 
         # Main training loop
-        # Algorithm order: Step 0 (Follower learning) → Step 1 (Collect trajectories) → Step 2 (MDCE IRL) → Steps 3-5
+        # Algorithm order: Step 0 (Follower learning) -> Step 1 (Collect trajectories) -> Step 2 (MDCE IRL) -> Steps 3-5
         for iteration in range(n_leader_iterations):
             if verbose:
                 print(f"\n=== Leader Iteration {iteration} ===")
 
             # Step 0: フォロワー方策の学習
-            # Follower interacts with environment (under f_{θ_L^n}) and updates its own Q_F
-            # using its own (observable) reward r_F from the environment
-            # Note: フォロワーは環境から報酬を直接獲得できるため、真の報酬でQ_Fを学習する
             if iteration == 0:
                 # First iteration: Follower learns its policy using Soft Value Iteration (SoftVI)
                 if verbose:
@@ -1719,21 +1759,23 @@ class BilevelRL:
                     verbose=verbose,
                 )
 
-                # Initialize FollowerPolicyModel with computed Q-values
-                # Use FollowerPolicyModel instead of SoftQLearning since Q-values are already computed
+                # Initialize FollowerPolicyModel
                 temperature = self.soft_q_config.get("temperature", 1.0)
                 self.soft_q_learning = FollowerPolicyModel(
                     env_spec=self.env_spec,
                     temperature=temperature,
                 )
-
-                # Set Q-values from SoftVI
-                # FollowerPolicyModel.set_q_values expects dict mapping (s, a, b) -> Q-value
                 self.soft_q_learning.set_q_values(Q_softvi)
 
+                # === [追加] 真のフォロワーモデルをバックアップ (評価用) ===
+                self.true_follower_model = FollowerPolicyModel(
+                    env_spec=self.env_spec,
+                    temperature=temperature,
+                )
+                self.true_follower_model.set_q_values(Q_softvi)
+                # ========================================================
+
                 # Create follower policy from learned Q-function
-                # If deterministic, choose action with maximum Q-value
-                # Otherwise, sample from Max-Ent policy
                 def follower_policy_fn(obs, leader_act, deterministic=False):
                     if deterministic:
                         # Choose action with maximum Q-value
@@ -1763,20 +1805,15 @@ class BilevelRL:
                     print("\n" + "=" * 80)
                     print("FOLLOWER Q-VALUES AFTER STEP 0 (First Iteration - SoftVI)")
                     print("=" * 80)
-                    self._display_follower_q_values(env=env, show_true_q=False)  # Disable True Q comparison
+                    self._display_follower_q_values(env=env, show_true_q=False)
                     print("=" * 80 + "\n")
 
             else:
-                # Subsequent iterations: Follower re-learns its policy using Soft Value Iteration
-                # Note: リーダーの方策が更新されたため、フォロワーも再学習が必要
-                # フォロワーはリーダーの方策が見えているとして、SoftVIで最適Q値を計算
+                # Subsequent iterations
                 if verbose:
-                    print(
-                        f"Step 0 (Iteration {iteration}): Re-computing follower policy using Soft Value Iteration (SoftVI)...",
-                    )
-                    print("  (Follower can see leader's policy)")
+                    print(f"Step 0 (Iteration {iteration}): Re-computing follower policy using Soft Value Iteration (SoftVI)...")
 
-                # Use SoftVI to compute optimal Q-values with updated leader policy
+                # Use SoftVI to compute optimal Q-values
                 if verbose:
                     print("Computing optimal Q-values using SoftVI...")
                 Q_softvi = self._compute_softvi_q_values(
@@ -1786,39 +1823,43 @@ class BilevelRL:
                     verbose=verbose,
                 )
 
-                # Update FollowerPolicyModel with computed Q-values
-                # Use FollowerPolicyModel instead of SoftQLearning since Q-values are already computed
+                # Update FollowerPolicyModel
                 temperature = self.soft_q_config.get("temperature", 1.0)
                 self.soft_q_learning = FollowerPolicyModel(
                     env_spec=self.env_spec,
                     temperature=temperature,
                 )
-
-                # Set Q-values from SoftVI
-                # FollowerPolicyModel.set_q_values expects dict mapping (s, a, b) -> Q-value
                 self.soft_q_learning.set_q_values(Q_softvi)
 
-                # Display learned Q-values for verification
+                # === [追加] 真のフォロワーモデルをバックアップ (評価用) ===
+                self.true_follower_model = FollowerPolicyModel(
+                    env_spec=self.env_spec,
+                    temperature=temperature,
+                )
+                self.true_follower_model.set_q_values(Q_softvi)
+                # ========================================================
+
+                # Display learned Q-values
                 if verbose:
                     print("\n" + "=" * 80)
                     print(f"FOLLOWER Q-VALUES AFTER STEP 0 (Iteration {iteration} - SoftVI)")
                     print("=" * 80)
-                    self._display_follower_q_values(env=env, show_true_q=False)  # Disable True Q comparison
+                    self._display_follower_q_values(env=env, show_true_q=False)
                     print("=" * 80 + "\n")
 
+            # Step 1 & 2: MDCE IRL
+            # [修正] 実行条件のコメントアウトを解除
             should_run_mdce_irl = iteration == 0
 
             if should_run_mdce_irl:
-                # Step 1: Collect trajectories using current policies (parallelized)
+                # Step 1: Collect trajectories
                 if verbose:
                     print(f"Step 1: Collecting {n_episodes_per_iteration} episodes (parallelized)...")
 
-                # Prepare data for parallel processing (all must be pickle-able)
                 env_class = type(env)
                 env_class_name = env_class.__name__
                 env_module_path = env_class.__module__
 
-                # Get environment initialization arguments
                 env_init_kwargs = {}
                 if hasattr(env, "_init_kwargs"):
                     env_init_kwargs = env._init_kwargs
@@ -1829,33 +1870,25 @@ class BilevelRL:
                         if arg in env_dict:
                             env_init_kwargs[arg] = env_dict[arg]
 
-                # Get leader policy table (must be pickle-able)
                 if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
                     leader_policy_table = self.leader_policy_obj.policy_table.copy()
                 else:
-                    # Fallback: create uniform policy table
                     num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
-                    num_leader_actions = (
-                        self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
-                    )
+                    num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
                     leader_policy_table = np.ones((num_states, num_leader_actions)) / num_leader_actions
 
-                # Get follower Q-values (must be pickle-able)
                 follower_q_values = {}
                 if self.soft_q_learning is not None and hasattr(self.soft_q_learning, "Q"):
-                    # Convert nested defaultdict to regular dict for pickling
                     for state_key, leader_dict in self.soft_q_learning.Q.items():
                         follower_q_values[state_key] = {}
                         for leader_key, follower_dict in leader_dict.items():
                             follower_q_values[state_key][leader_key] = dict(follower_dict)
 
-                # Get environment spec info (simplified, only what's needed)
-                env_spec_dict = {}  # Can be extended if needed
+                env_spec_dict = {}
                 num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
                 temperature = self.soft_q_config.get("temperature", 1.0)
 
-                # Collect episodes in parallel
-                max_workers = min(n_episodes_per_iteration, 8)  # Limit number of workers
+                max_workers = min(n_episodes_per_iteration, 8)
                 observations_list = []
                 leader_actions_list = []
                 follower_actions_list = []
@@ -1866,9 +1899,7 @@ class BilevelRL:
                 last_flags_list = []
                 time_steps_list = []
 
-                # Use ProcessPoolExecutor for parallel episode collection
                 with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all episodes
                     futures = [
                         executor.submit(
                             _collect_single_episode,
@@ -1884,7 +1915,6 @@ class BilevelRL:
                         for _ in range(n_episodes_per_iteration)
                     ]
 
-                    # Collect results as they complete
                     for future in as_completed(futures):
                         episode_data = future.result()
                         observations_list.extend(episode_data["observation"])
@@ -1897,7 +1927,6 @@ class BilevelRL:
                         last_flags_list.extend(episode_data["last"])
                         time_steps_list.extend(episode_data["time_step"])
 
-                # Add transitions to replay buffer
                 if observations_list:
                     replay_buffer.add_transitions(
                         observation=np.array(observations_list),
@@ -1940,11 +1969,12 @@ class BilevelRL:
 
                 if verbose:
                     print("Step 2: Leader estimates follower's reward function using MDCE IRL...")
-
                 # MDCE IRL uses current expert demonstration trajectories
                 # This estimates follower's reward function and updates self.soft_q_learning with g_{w^n}
+
                 self.estimate_follower_reward(current_expert_trajectories, env, verbose=verbose)
 
+                # (デバッグ用Q値比較コードは省略またはそのまま維持)
                 # Note: MDCE IRLで推定された方策 g_{w^n} は self.soft_q_learning に保存され、
                 # Step 3（Critic更新）とStep 4（勾配計算）で使用される
                 # フォロワー自身は次のイテレーションのStep 0で真の報酬を使って再学習する
@@ -1989,18 +2019,18 @@ class BilevelRL:
                     print(f"Mean Diff: {np.mean(diffs):.6f}")
                     print(f"Max Diff:  {np.max(diffs):.6f}")
                     print("=" * 80 + "\n")
+
             elif verbose:
                 print(
                     f"Step 1,2: Skipping MDCE IRL (runs every {mdce_irl_frequency} iterations, next at iteration {((iteration // mdce_irl_frequency) + 1) * mdce_irl_frequency})",
                 )
 
-            # Step 3: Update leader's Critic (Q-table)
+            # Step 3: Update leader's Critic
             if replay_buffer._current_size > 0:
                 if verbose:
                     print(f"Step 3: Updating leader's Critic ({n_critic_updates} updates)...")
                 self._update_leader_critic(replay_buffer, n_updates=n_critic_updates)
 
-                # Display leader Q-values after update
                 if verbose:
                     print("\n" + "=" * 80)
                     print(f"LEADER Q-VALUES AFTER STEP 3 (Iteration {iteration})")
@@ -2024,6 +2054,7 @@ class BilevelRL:
                     first_term_norm = gradient_info.get("first_term_norm", 0.0)
                     second_term_norm = gradient_info.get("second_term_norm", 0.0)
                     total_norm = gradient_info.get("gradient_norm", 0.0)
+                    print(f"  Total gradient norm: {total_norm:.4f}")
 
                     print(f"  Total gradient norm: {total_norm:.4f}")
                     print(
@@ -2034,19 +2065,74 @@ class BilevelRL:
                     )
                     print(f"  Mean Q-value: {gradient_info.get('mean_q_value', 0.0):.4f}")
 
+
             # Step 5: Update leader's Actor
             if verbose:
                 print("Step 5: Updating leader's Actor...")
+            # Step 5: Update leader's Actor
             self._update_leader_actor(gradient_info)
 
-            # Compute and log objective
-            eval_metrics = self.evaluate_leader(env, n_episodes=10)
+            # === [修正] 2つのフォロワーに対する評価と比較 ===
 
-            self.stats["leader_objective"].append(eval_metrics["objective"]) # 既存
-            self.stats.setdefault("leader_return", []).append(eval_metrics["return"]) # 新規追加
-
+            # 1. リーダーの状態を表示 (デバッグ用)
             if verbose:
-                print(f"Leader objective (Discounted): {eval_metrics['objective']:.4f}")
-                print(f"Leader return (Raw Score):     {eval_metrics['return']:.4f}")
+                self._log_leader_state(iteration)
+
+            # -------------------------------------------------------
+            # 評価A: vs Learned Follower (学習中の推定モデル)
+            # -------------------------------------------------------
+            # 現在の self.follower_policy は「推定された報酬」に基づく方策になっている
+            eval_learned = self.evaluate_leader(
+                env,
+                self.follower_policy,
+                n_episodes=10
+            )
+
+            self.stats.setdefault("leader_return_learned", []).append(eval_learned["mean"])
+            self.stats.setdefault("leader_return_learned_std", []).append(eval_learned["std"])
+
+            # -------------------------------------------------------
+            # 評価B: vs True Follower (真の最適モデル)
+            # -------------------------------------------------------
+            # Step 0 で保存した真のモデル (self.true_follower_model) を使う
+            if self.true_follower_model is not None:
+                # 方策関数としてラップする
+                def true_follower_fn(obs, leader_act, deterministic=False):
+                    # 常に確率的に振る舞う真のフォロワー
+                    return self.true_follower_model.sample_action(obs, leader_act)
+
+                eval_true = self.evaluate_leader(
+                    env,
+                    true_follower_fn,
+                    n_episodes=10
+                )
+
+                self.stats.setdefault("leader_return_true", []).append(eval_true["mean"])
+                self.stats.setdefault("leader_return_true_std", []).append(eval_true["std"])
+
+                # メインの記録 (leader_return) には「真の実力 (True)」を採用する
+                self.stats.setdefault("leader_return", []).append(eval_true["mean"])
+                self.stats.setdefault("leader_return_std", []).append(eval_true["std"])
+                # 目的関数値も便宜上ここに入れる（あるいは別途計算）
+                self.stats["leader_objective"].append(eval_true["mean"])
+            else:
+                # 初回などでモデルがない場合のフォールバック
+                eval_true = eval_learned
+                self.stats["leader_objective"].append(eval_learned["mean"])
+                self.stats.setdefault("leader_return", []).append(eval_learned["mean"])
+
+            # -------------------------------------------------------
+            # ログ出力
+            # -------------------------------------------------------
+            if verbose:
+                print(f"Leader Performance (N=10):")
+                # True (青線になる予定)
+                print(f"  vs True (SoftVI):    {eval_true['mean']:.4f} +/- {eval_true['std']:.4f}")
+                # Learned (オレンジ線になる予定)
+                print(f"  vs Learned (IRL):    {eval_learned['mean']:.4f} +/- {eval_learned['std']:.4f}")
+                # 差分 (これが小さいほどIRLが成功している)
+                print(f"  Gap (True - Lrnd):   {eval_true['mean'] - eval_learned['mean']:.4f}")
+
+            # =======================================================
 
         return self.stats

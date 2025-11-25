@@ -61,8 +61,8 @@ def main():
         mdce_irl_config={
             "max_iterations": 1000,
             "tolerance": 0.01,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
-            "n_soft_q_iterations": 1000,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 3000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_soft_q_iterations": 500,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 1000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={
@@ -78,7 +78,7 @@ def main():
     print("Starting training...")
     stats = algo.train(
         env=env,
-        n_leader_iterations=1000,
+        n_leader_iterations=100,
         n_follower_iterations=500,
         n_episodes_per_iteration=1000,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
         verbose=True,
@@ -89,7 +89,7 @@ def main():
 
     # Save statistics
 
-    output_dir = Path("data/internal/softq1000_mc3000actor1e-5_critic1e-4")
+    output_dir = Path("data/internal/vstruefollower")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats_path = output_dir / "training_stats.pkl"
