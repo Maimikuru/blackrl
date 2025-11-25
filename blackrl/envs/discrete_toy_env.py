@@ -288,14 +288,6 @@ class DiscreteToyEnvPaper(DiscreteToyEnvBase):
 
         self.follower_rewards[0, :, 1] = 1
         self.follower_rewards[0, :, 2] = 1
-        self.follower_rewards[1, 0, 0] = -1
         self.follower_rewards[1, 1, :] = -1
         self.follower_rewards[1, 0, 2] = 1
         self.follower_r_range = (-1, 1)
-
-        self.opt_follower_action_table[0, 0, 1] = 1
-        self.opt_follower_action_table[0, 1, 0] = 1
-        self.opt_follower_action_table[0, 2, 0] = 1
-        self.opt_follower_action_table[1, 0, 2] = 1
-        self.opt_follower_action_table[1, 1, 0] = 1
-        self.opt_follower_action_table[1, 2, 0] = 1

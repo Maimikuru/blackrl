@@ -55,14 +55,14 @@ def main():
         feature_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
         discount_follower=0.8,  # RESTORED: 0.8 changes the problem definition
-        learning_rate_leader_critic=1e-6,  # Leader Critic (Q-table) learning rate
         learning_rate_leader_actor=1e-5,   # Leader Actor (Policy) learning rate
+        learning_rate_leader_critic=1e-4,  # Leader Critic (Q-table) learning rate
         learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
         mdce_irl_config={
             "max_iterations": 1000,
             "tolerance": 0.01,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
-            "n_soft_q_iterations": 3000,  # INCREASED: 2x for better convergence (not 10x)
-            "n_monte_carlo_samples": 5000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
+            "n_soft_q_iterations": 1000,  # INCREASED: 2x for better convergence (not 10x)
+            "n_monte_carlo_samples": 3000,  # INCREASED: 1.5x for better FEV estimation (not 2x)
             "n_jobs": -1,
         },
         soft_q_config={
@@ -89,7 +89,8 @@ def main():
 
     # Save statistics
 
-    output_dir = Path("data/internal")
+    output_dir = Path("data/internal/softq1000_mc3000actor1e-5_critic1e-4")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     stats_path = output_dir / "training_stats.pkl"
     with open(stats_path, "wb") as f:

@@ -1,157 +1,161 @@
-"""Plot learning curves for Bilevel RL training."""
-
+import pickle
 import matplotlib.pyplot as plt
 import numpy as np
-
+from pathlib import Path
 
 def plot_learning_curves(stats, save_path=None):
-    """Plot comprehensive learning curves from training statistics.
+    """Plot comprehensive learning curves.
 
-    Args:
-        stats: Dictionary of training statistics from algo.train()
-        save_path: Optional path to save the figure
-
+    Plots 6 metrics:
+    1. Leader Return (Undiscounted) - The raw score (performance)
+    2. IRL Delta FEM - Convergence of feature matching
+    3. IRL Likelihood - How well the reward explains behavior
+    4. Leader Gradient Norm - Stability of leader's update
+    5. Leader Objective (Discounted) - The optimization target
+    6. Leader Q-Values - Value estimation statistics
     """
-    # Create figure with subplots
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    fig.suptitle("Bilevel RL Training Curves", fontsize=16, fontweight="bold")
 
-    # Plot 1: Leader Objective
+    # Set style
+    plt.style.use("seaborn-v0_8-darkgrid")
+    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+
+    # Flatten axes for easier indexing
+    # ax1, ax2, ax3
+    # ax4, ax5, ax6
+
+    # --- Plot 1: Leader Return (Undiscounted) [MAIN METRIC] ---
     ax = axes[0, 0]
-    if "leader_objective" in stats and len(stats["leader_objective"]) > 0:
-        iterations = range(len(stats["leader_objective"]))
-        ax.plot(iterations, stats["leader_objective"], "b-", linewidth=2, label="Leader Objective")
-        ax.set_xlabel("Leader Iteration", fontsize=12)
-        ax.set_ylabel("Objective Value", fontsize=12)
-        ax.set_title("Leader Objective", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-    else:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Leader Objective")
+    if "leader_return" in stats and len(stats["leader_return"]) > 0:
+        iterations = range(len(stats["leader_return"]))
+        ax.plot(iterations, stats["leader_return"], "b-", linewidth=2, label="Undiscounted Return")
 
-    # Plot 2: IRL Delta FEM (Convergence Criterion)
+        # Moving average (window=10)
+        if len(stats["leader_return"]) > 20:
+            window = 10
+            ma = np.convolve(stats["leader_return"], np.ones(window)/window, mode='valid')
+            ax.plot(range(window-1, len(stats["leader_return"])), ma, "r--", linewidth=1.5, alpha=0.8, label="Moving Avg (10)")
+
+        ax.set_xlabel("Leader Iteration", fontsize=12)
+        ax.set_ylabel("Total Reward per Episode", fontsize=12)
+        ax.set_title("Leader Average Return (Raw Score)", fontsize=14, fontweight="bold")
+        ax.legend(loc="lower right")
+    else:
+        ax.text(0.5, 0.5, "No Return Data\n(Update bilevel_rl.py)", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title("Leader Average Return", fontsize=14, fontweight="bold")
+
+    # --- Plot 2: IRL Delta FEM ---
     ax = axes[0, 1]
     if "irl_delta_fem" in stats and len(stats["irl_delta_fem"]) > 0:
-        ax.plot(stats["irl_delta_fem"], "r-", linewidth=2, alpha=0.7, label="δ_FEM")
-        ax.axhline(y=0.05, color="g", linestyle="--", linewidth=2, label="Tolerance (0.05)")
-        ax.set_xlabel("IRL Iteration", fontsize=12)
-        ax.set_ylabel("δ_FEM (Relative Error)", fontsize=12)
-        ax.set_title("MDCE IRL Convergence (δ_FEM)", fontsize=14, fontweight="bold")
+        # IRL runs less frequently, so create x-axis
+        # Assuming logged every iteration or less
+        # Flatten if nested list
+        deltas = []
+        if isinstance(stats["irl_delta_fem"][0], list):
+            for sublist in stats["irl_delta_fem"]:
+                deltas.extend(sublist)
+        else:
+            deltas = stats["irl_delta_fem"]
+
+        ax.plot(deltas, "g-", linewidth=1.5, label="Delta FEM")
+        ax.axhline(y=0.1, color="r", linestyle="--", alpha=0.5, label="Threshold (0.1)")
+        ax.axhline(y=0.025, color="m", linestyle=":", alpha=0.5, label="Target (0.025)")
+
         ax.set_yscale("log")
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel("IRL Steps (Cumulative)", fontsize=12)
+        ax.set_ylabel("Max Relative Error (log scale)", fontsize=12)
+        ax.set_title("IRL Feature Matching Error", fontsize=14, fontweight="bold")
         ax.legend()
     else:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("MDCE IRL Convergence (δ_FEM)")
+        ax.text(0.5, 0.5, "No IRL Data", ha="center", va="center", transform=ax.transAxes)
 
-    # Plot 3: IRL Likelihood
+    # --- Plot 3: IRL Likelihood ---
     ax = axes[0, 2]
     if "irl_likelihood" in stats and len(stats["irl_likelihood"]) > 0:
-        # Extract iterations and likelihoods
-        irl_iters, likelihoods = zip(*stats["irl_likelihood"], strict=False)
-        ax.plot(irl_iters, likelihoods, "g-", linewidth=2, marker="o", markersize=6, label="Likelihood")
-        ax.set_xlabel("IRL Iteration", fontsize=12)
-        ax.set_ylabel("Log Likelihood", fontsize=12)
-        ax.set_title("MDCE IRL Likelihood", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-    else:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("MDCE IRL Likelihood")
+        # Extract values from (iter, val) tuples or list
+        if isinstance(stats["irl_likelihood"][0], tuple):
+            values = [x[1] for x in stats["irl_likelihood"]]
+        else:
+            values = stats["irl_likelihood"]
 
-    # Plot 4: Leader Gradient Norm
+        ax.plot(values, "purple", linewidth=1.5)
+        ax.set_xlabel("IRL Evaluation Steps", fontsize=12)
+        ax.set_ylabel("Log Likelihood", fontsize=12)
+        ax.set_title("IRL Log Likelihood", fontsize=14, fontweight="bold")
+    else:
+        ax.text(0.5, 0.5, "No Likelihood Data", ha="center", va="center", transform=ax.transAxes)
+
+    # --- Plot 4: Leader Gradient Norm ---
     ax = axes[1, 0]
     if "leader_gradient_norm" in stats and len(stats["leader_gradient_norm"]) > 0:
-        iterations = range(len(stats["leader_gradient_norm"]))
-        ax.plot(iterations, stats["leader_gradient_norm"], "m-", linewidth=2, label="Leader Gradient")
+        ax.plot(stats["leader_gradient_norm"], "orange", linewidth=1.5)
+        ax.set_yscale("log")
         ax.set_xlabel("Leader Iteration", fontsize=12)
-        ax.set_ylabel("Gradient Norm", fontsize=12)
-        ax.set_title("Leader Policy Gradient Norm", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
+        ax.set_ylabel("Gradient Norm (log scale)", fontsize=12)
+        ax.set_title("Leader Gradient Stability", fontsize=14, fontweight="bold")
     else:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Leader Policy Gradient Norm")
+        ax.text(0.5, 0.5, "No Gradient Data", ha="center", va="center", transform=ax.transAxes)
 
-    # Plot 5: Leader Mean Q-value
+    # --- Plot 5: Leader Objective (Discounted) ---
     ax = axes[1, 1]
-    if "leader_mean_q_value" in stats and len(stats["leader_mean_q_value"]) > 0:
-        iterations = range(len(stats["leader_mean_q_value"]))
-        ax.plot(iterations, stats["leader_mean_q_value"], "c-", linewidth=2, label="Mean Q-value")
+    if "leader_objective" in stats and len(stats["leader_objective"]) > 0:
+        ax.plot(stats["leader_objective"], "c-", linewidth=2, label="Discounted J")
         ax.set_xlabel("Leader Iteration", fontsize=12)
-        ax.set_ylabel("Q-value", fontsize=12)
-        ax.set_title("Leader Mean Q-value", fontsize=14, fontweight="bold")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
+        ax.set_ylabel("Objective Value (J)", fontsize=12)
+        ax.set_title("Leader Objective (Discounted)", fontsize=14, fontweight="bold")
     else:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Leader Mean Q-value")
+        ax.text(0.5, 0.5, "No Objective Data", ha="center", va="center", transform=ax.transAxes)
 
-    # Plot 6: Summary Statistics
+    # --- Plot 6: Summary Text ---
     ax = axes[1, 2]
     ax.axis("off")
 
-    # Collect summary statistics
-    summary_text = "Training Summary\n" + "=" * 40 + "\n\n"
+    summary = "Training Summary\n"
+    summary += "----------------\n\n"
+
+    if "leader_return" in stats and len(stats["leader_return"]) > 0:
+        final_ret = stats["leader_return"][-1]
+        max_ret = np.max(stats["leader_return"])
+        summary += f"Leader Return (Raw):\n"
+        summary += f"  Final: {final_ret:.4f}\n"
+        summary += f"  Max:   {max_ret:.4f}\n\n"
 
     if "leader_objective" in stats and len(stats["leader_objective"]) > 0:
         final_obj = stats["leader_objective"][-1]
-        initial_obj = stats["leader_objective"][0]
-        improvement = final_obj - initial_obj
-        summary_text += "Leader Objective:\n"
-        summary_text += f"  Initial: {initial_obj:.4f}\n"
-        summary_text += f"  Final: {final_obj:.4f}\n"
-        summary_text += f"  Improvement: {improvement:+.4f}\n\n"
+        summary += f"Leader Objective (J):\n"
+        summary += f"  Final: {final_obj:.4f}\n\n"
 
     if "irl_delta_fem" in stats and len(stats["irl_delta_fem"]) > 0:
-        final_delta_fem = stats["irl_delta_fem"][-1]
-        converged = "Yes" if final_delta_fem < 0.05 else "No"
-        summary_text += "MDCE IRL:\n"
-        summary_text += f"  Final δ_FEM: {final_delta_fem:.6f}\n"
-        summary_text += f"  Converged: {converged}\n\n"
+        deltas = []
+        if isinstance(stats["irl_delta_fem"][0], list):
+            for sublist in stats["irl_delta_fem"]:
+                deltas.extend(sublist)
+        else:
+            deltas = stats["irl_delta_fem"]
 
-    if "leader_gradient_norm" in stats and len(stats["leader_gradient_norm"]) > 0:
-        avg_grad = np.mean(stats["leader_gradient_norm"])
-        summary_text += "Leader Policy:\n"
-        summary_text += f"  Avg Gradient: {avg_grad:.4f}\n\n"
+        if len(deltas) > 0:
+            final_delta = deltas[-1]
+            min_delta = np.min(deltas)
+            summary += f"IRL Delta FEM:\n"
+            summary += f"  Final: {final_delta:.6f}\n"
+            summary += f"  Best:  {min_delta:.6f}\n"
 
-    summary_text += f"Total Leader Iterations: {len(stats.get('leader_objective', []))}\n"
-
-    ax.text(
-        0.1,
-        0.9,
-        summary_text,
-        transform=ax.transAxes,
-        fontsize=11,
-        verticalalignment="top",
-        family="monospace",
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.3),
-    )
+    ax.text(0.1, 0.9, summary, transform=ax.transAxes, fontsize=14, verticalalignment='top', family='monospace')
 
     plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path)
         print(f"Learning curves saved to: {save_path}")
 
     return fig
 
-
 if __name__ == "__main__":
-    # Example usage
-    import pickle
-    import sys
-
-    if len(sys.argv) > 1:
-        # Load stats from pickle file
-        stats_file = sys.argv[1]
-        with open(stats_file, "rb") as f:
-            stats = pickle.load(f)
-
-        save_path = stats_file.replace(".pkl", "_curves.png")
-        plot_learning_curves(stats, save_path=save_path)
-        plt.show()
-    else:
-        print("Usage: python plot_learning_curves.py <stats_file.pkl>")
-        print("Or import and use plot_learning_curves(stats) in your script")
+    # Test with dummy data if run directly
+    dummy_stats = {
+        "leader_return": np.random.rand(100) * 10 + 5,
+        "leader_objective": np.random.rand(100) * 5 + 8,
+        "leader_gradient_norm": np.random.rand(100) * 100,
+        "irl_delta_fem": [np.linspace(0.5, 0.01, 100).tolist()],
+        "irl_likelihood": np.linspace(-2, -0.5, 10),
+    }
+    plot_learning_curves(dummy_stats, "dummy_plot.png")

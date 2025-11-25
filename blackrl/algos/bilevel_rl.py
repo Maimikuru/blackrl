@@ -531,6 +531,25 @@ class BilevelRL:
 
         return Q_true
 
+    def _display_learned_rewards(self, reward_fn):
+        """Display learned reward function r_F(s, a, b)."""
+        print("\nLearned Reward Function: r_F(s, a, b)")
+        print("-" * 80)
+
+        # Get dimensions
+        num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
+        num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+        num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
+
+        for s in range(num_states):
+            print(f"\nState {s}:")
+            for a in range(num_leader_actions):
+                rewards = []
+                for b in range(num_follower_actions):
+                     r_val = reward_fn(s, a, b)
+                     rewards.append(f"b={b}: {r_val:6.3f}")
+                print(f"  Leader action {a}: " + "  ".join(rewards))
+
     def _display_softq_stats(self, soft_q_learning, irl_iteration: int):
         """Display statistics of Q-values from Soft Q-Learning.
 
@@ -933,6 +952,22 @@ class BilevelRL:
             if delta_fem < self.mdce_irl.tolerance:
                 if verbose:
                     print(f"MDCE IRL converged at iteration {irl_iteration}: δ_FEM={delta_fem:.6f}")
+
+                    # === [追加] 収束時の詳細ログ出力 ===
+                    print("\n" + "=" * 80)
+                    print("MDCE IRL CONVERGED - FINAL STATISTICS")
+                    print("=" * 80)
+
+                    # 1. 報酬関数の表示 (現在学習に使った reward_fn を使用)
+                    self._display_learned_rewards(reward_fn)
+
+                    # 2. Q値と方策確率の表示 (既存メソッドを再利用)
+                    # show_true_q=False にして、学習された値のみを表示
+                    self._display_follower_q_values(env=env, show_true_q=False)
+
+                    print("=" * 80 + "\n")
+                    # ====================================
+
                 break
 
             # Log IRL metrics
@@ -1160,6 +1195,47 @@ class BilevelRL:
             return self.soft_q_learning.sample_action(obs, leader_act)
 
         self.follower_policy = follower_policy_fn
+
+        # [修正] 既存の compute_leader_objective を置き換え
+    def evaluate_leader(
+        self,
+        env,
+        n_episodes: int = 10,
+    ) -> dict[str, float]:
+        """Evaluate leader's performance (Discounted & Undiscounted)."""
+        total_objectives = []  # Discounted (目的関数値)
+        total_returns = []     # Undiscounted (累積報酬)
+
+        for _ in range(n_episodes):
+            obs, _ = env.reset()
+            episode_objective = 0.0
+            episode_return = 0.0
+            discount_factor = 1.0
+
+            while True:
+                leader_act, follower_act = self.get_joint_action(obs)
+                env_step = env.step(leader_act, follower_act)
+
+                # リーダーの報酬を取得
+                leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
+
+                # 両方を計算
+                episode_objective += discount_factor * leader_reward  # 割引あり
+                episode_return += leader_reward                       # 割引なし (Raw Score)
+
+                discount_factor *= self.discount_leader
+                obs = env_step.observation
+
+                if env_step.last:
+                    break
+
+            total_objectives.append(episode_objective)
+            total_returns.append(episode_return)
+
+        return {
+            "objective": np.mean(total_objectives),
+            "return": np.mean(total_returns),
+        }
 
     def compute_leader_objective(
         self,
@@ -1872,6 +1948,47 @@ class BilevelRL:
                 # Note: MDCE IRLで推定された方策 g_{w^n} は self.soft_q_learning に保存され、
                 # Step 3（Critic更新）とStep 4（勾配計算）で使用される
                 # フォロワー自身は次のイテレーションのStep 0で真の報酬を使って再学習する
+
+                # === [Added] Display MDECE (Learned) vs SoftVI (True) Q-Values ===
+                if verbose:
+                    print("\n" + "=" * 80)
+                    print(f"MDECE (Learned) vs SoftVI (True) Q-Values (Iteration {iteration})")
+                    print("=" * 80)
+
+                    # 1. Compute SoftVI Q-values (True optimal under current leader policy)
+                    print("Computing SoftVI Q-values for comparison...")
+                    Q_softvi = self._compute_softvi_q_values(
+                        env,
+                        max_iterations=2000,
+                        tolerance=1e-15,
+                        verbose=False,
+                    )
+
+                    # 2. Get Learned Q-values from self.soft_q_learning
+                    # self.soft_q_learning is now the one estimated by MDCE IRL (with reward w)
+
+                    num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
+                    num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+                    num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
+
+                    print(f"\n{'State':<6} {'L-Act':<6} {'F-Act':<6} | {'MDECE (Learned)':<15} | {'SoftVI (True)':<15} | {'Diff':<10}")
+                    print("-" * 80)
+
+                    diffs = []
+                    for s in range(num_states):
+                        for a in range(num_leader_actions):
+                            for b in range(num_follower_actions):
+                                q_mdece = self.soft_q_learning.get_q_value(s, a, b)
+                                q_softvi = Q_softvi.get((s, a, b), 0.0)
+                                diff = abs(q_mdece - q_softvi)
+                                diffs.append(diff)
+
+                                print(f"{s:<6} {a:<6} {b:<6} | {q_mdece:15.6f} | {q_softvi:15.6f} | {diff:10.6f}")
+
+                    print("-" * 80)
+                    print(f"Mean Diff: {np.mean(diffs):.6f}")
+                    print(f"Max Diff:  {np.max(diffs):.6f}")
+                    print("=" * 80 + "\n")
             elif verbose:
                 print(
                     f"Step 1,2: Skipping MDCE IRL (runs every {mdce_irl_frequency} iterations, next at iteration {((iteration // mdce_irl_frequency) + 1) * mdce_irl_frequency})",
@@ -1923,10 +2040,13 @@ class BilevelRL:
             self._update_leader_actor(gradient_info)
 
             # Compute and log objective
-            objective = self.compute_leader_objective(env, n_episodes=10)
-            self.stats["leader_objective"].append(objective)
+            eval_metrics = self.evaluate_leader(env, n_episodes=10)
+
+            self.stats["leader_objective"].append(eval_metrics["objective"]) # 既存
+            self.stats.setdefault("leader_return", []).append(eval_metrics["return"]) # 新規追加
 
             if verbose:
-                print(f"Leader objective: {objective:.4f}")
+                print(f"Leader objective (Discounted): {eval_metrics['objective']:.4f}")
+                print(f"Leader return (Raw Score):     {eval_metrics['return']:.4f}")
 
         return self.stats
