@@ -226,20 +226,26 @@ class BilevelRL:
         self.discount_follower = discount_follower
 
         # Set separate learning rates, falling back to learning_rate_leader if not specified
-        self.learning_rate_leader_critic = learning_rate_leader_critic if learning_rate_leader_critic is not None else learning_rate_leader
-        self.learning_rate_leader_actor = learning_rate_leader_actor if learning_rate_leader_actor is not None else learning_rate_leader
+        self.learning_rate_leader_actor = (
+            learning_rate_leader_actor if learning_rate_leader_actor is not None else learning_rate_leader
+        )
+        self.learning_rate_leader_critic = (
+            learning_rate_leader_critic if learning_rate_leader_critic is not None else learning_rate_leader
+        )
         self.learning_rate_follower = learning_rate_follower
         self.leader_policy_table: np.ndarray | None = None
         self._use_tabular_policy = False
 
         # Initialize Leader Policy
         if leader_policy is None:
+
             def default_leader_policy(observation, deterministic=False):
                 """Default uniform leader policy for initial exploration."""
                 num_actions = env_spec.leader_action_space.n if hasattr(env_spec.leader_action_space, "n") else 2
                 if deterministic:
                     return 0
                 return int(np.random.choice(num_actions))
+
             leader_policy = default_leader_policy
 
         # Keep leader_policy as Callable for backward compatibility
@@ -292,8 +298,8 @@ class BilevelRL:
         for s in range(num_states):
             print(f"State {s}:")
             # 1. 方策確率の表示
-            if self._use_tabular_policy and self.leader_policy_table is not None:
-                probs = self.leader_policy_table[s]
+            if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
+                probs = self.leader_policy_obj.policy_table[s]
                 probs_str = "  ".join([f"P(a={a})={p:.4f}" for a, p in enumerate(probs)])
                 print(f"  Policy: {probs_str}")
 
@@ -577,8 +583,8 @@ class BilevelRL:
             for a in range(num_leader_actions):
                 rewards = []
                 for b in range(num_follower_actions):
-                     r_val = reward_fn(s, a, b)
-                     rewards.append(f"b={b}: {r_val:6.3f}")
+                    r_val = reward_fn(s, a, b)
+                    rewards.append(f"b={b}: {r_val:6.3f}")
                 print(f"  Leader action {a}: " + "  ".join(rewards))
 
     def _display_softq_stats(self, soft_q_learning, irl_iteration: int):
@@ -1228,6 +1234,7 @@ class BilevelRL:
         self.follower_policy = follower_policy_fn
 
         # [修正] 既存の compute_leader_objective を置き換え
+
     def evaluate_leader(
         self,
         env,
@@ -1243,6 +1250,7 @@ class BilevelRL:
 
         Returns:
             Dictionary with mean and std of returns
+
         """
         # 一時的にクラスのフォロワー方策を、指定されたもの（True or Learned）に差し替える
         # get_joint_action が self.follower_policy を参照するため
@@ -1666,20 +1674,20 @@ class BilevelRL:
             policy_gradients = gradient_info.get("policy_gradients")
 
             if policy_gradients is not None:
-                # === [追加] 勾配クリッピング (Clip by Global Norm) ===
-                # 勾配全体のL2ノルムを計算
-                total_norm = np.linalg.norm(policy_gradients)
-                max_grad_norm = 1.0  # 許容する最大ノルム (調整パラメータ)
+                # # === [追加] 勾配クリッピング (Clip by Global Norm) ===
+                # # 勾配全体のL2ノルムを計算
+                # total_norm = np.linalg.norm(policy_gradients)
+                # max_grad_norm = 1.0  # 許容する最大ノルム (調整パラメータ)
 
-                # ノルムが上限を超えていたら、スケーリングして縮小する
-                if total_norm > max_grad_norm:
-                    clip_coef = max_grad_norm / (total_norm + 1e-6)
-                    # 勾配を上書きして縮小する
-                    policy_gradients = policy_gradients * clip_coef
+                # # ノルムが上限を超えていたら、スケーリングして縮小する
+                # if total_norm > max_grad_norm:
+                #     clip_coef = max_grad_norm / (total_norm + 1e-6)
+                #     # 勾配を上書きして縮小する
+                #     policy_gradients = policy_gradients * clip_coef
 
-                    # (デバッグ用) ログ出力
-                    # print(f"Gradient clipped: {total_norm:.2f} -> {max_grad_norm}")
-                # ===================================================
+                #     # (デバッグ用) ログ出力
+                #     # print(f"Gradient clipped: {total_norm:.2f} -> {max_grad_norm}")
+                # # ===================================================
 
                 # Update policy: π_L^{n+1} ← π_L^n + α_L * ∇_{π_L} J_L
                 # ※ ここは元のまま（確率の直接更新）
@@ -1811,7 +1819,9 @@ class BilevelRL:
             else:
                 # Subsequent iterations
                 if verbose:
-                    print(f"Step 0 (Iteration {iteration}): Re-computing follower policy using Soft Value Iteration (SoftVI)...")
+                    print(
+                        f"Step 0 (Iteration {iteration}): Re-computing follower policy using Soft Value Iteration (SoftVI)...",
+                    )
 
                 # Use SoftVI to compute optimal Q-values
                 if verbose:
@@ -1874,7 +1884,9 @@ class BilevelRL:
                     leader_policy_table = self.leader_policy_obj.policy_table.copy()
                 else:
                     num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
-                    num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+                    num_leader_actions = (
+                        self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+                    )
                     leader_policy_table = np.ones((num_states, num_leader_actions)) / num_leader_actions
 
                 follower_q_values = {}
@@ -1998,10 +2010,14 @@ class BilevelRL:
                     # self.soft_q_learning is now the one estimated by MDCE IRL (with reward w)
 
                     num_states = self.env_spec.observation_space.n if hasattr(self.env_spec.observation_space, "n") else 3
-                    num_leader_actions = self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+                    num_leader_actions = (
+                        self.env_spec.leader_action_space.n if hasattr(self.env_spec.leader_action_space, "n") else 2
+                    )
                     num_follower_actions = self.env_spec.action_space.n if hasattr(self.env_spec.action_space, "n") else 3
 
-                    print(f"\n{'State':<6} {'L-Act':<6} {'F-Act':<6} | {'MDECE (Learned)':<15} | {'SoftVI (True)':<15} | {'Diff':<10}")
+                    print(
+                        f"\n{'State':<6} {'L-Act':<6} {'F-Act':<6} | {'MDECE (Learned)':<15} | {'SoftVI (True)':<15} | {'Diff':<10}",
+                    )
                     print("-" * 80)
 
                     diffs = []
@@ -2065,7 +2081,6 @@ class BilevelRL:
                     )
                     print(f"  Mean Q-value: {gradient_info.get('mean_q_value', 0.0):.4f}")
 
-
             # Step 5: Update leader's Actor
             if verbose:
                 print("Step 5: Updating leader's Actor...")
@@ -2085,7 +2100,7 @@ class BilevelRL:
             eval_learned = self.evaluate_leader(
                 env,
                 self.follower_policy,
-                n_episodes=10
+                n_episodes=10,
             )
 
             self.stats.setdefault("leader_return_learned", []).append(eval_learned["mean"])
@@ -2104,7 +2119,7 @@ class BilevelRL:
                 eval_true = self.evaluate_leader(
                     env,
                     true_follower_fn,
-                    n_episodes=10
+                    n_episodes=10,
                 )
 
                 self.stats.setdefault("leader_return_true", []).append(eval_true["mean"])
@@ -2125,7 +2140,7 @@ class BilevelRL:
             # ログ出力
             # -------------------------------------------------------
             if verbose:
-                print(f"Leader Performance (N=10):")
+                print("Leader Performance (N=10):")
                 # True (青線になる予定)
                 print(f"  vs True (SoftVI):    {eval_true['mean']:.4f} +/- {eval_true['std']:.4f}")
                 # Learned (オレンジ線になる予定)

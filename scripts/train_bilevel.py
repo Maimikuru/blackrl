@@ -37,16 +37,27 @@ def main():
 
         """
         # Simple feature: concatenate one-hot encodings
-        state_onehot = np.zeros(3)
-        state_onehot[state] = 1.0
+        num_states = 3
 
-        leader_onehot = np.zeros(2)
-        leader_onehot[leader_action] = 1.0
+        num_leader_actions = 2
+        num_follower_actions = 3
 
-        follower_onehot = np.zeros(3)
-        follower_onehot[follower_action] = 1.0
+        total_dim = num_states * num_leader_actions * num_follower_actions
 
-        return np.concatenate([state_onehot, leader_onehot, follower_onehot])
+        # 一意なインデックスを計算
+        # index = s * (A*B) + a * (B) + b
+        # これにより 0 〜 17 のユニークなIDが振られる
+        s = int(state.item() if hasattr(state, "item") else state)
+        a = int(leader_action.item() if hasattr(leader_action, "item") else leader_action)
+        b = int(follower_action.item() if hasattr(follower_action, "item") else follower_action)
+
+        index = s * (num_leader_actions * num_follower_actions) + a * num_follower_actions + b
+
+        # One-hotベクトルを作成
+        feature = np.zeros(total_dim, dtype=np.float32)
+        feature[index] = 1.0
+
+        return feature
 
     # Initialize Bi-level RL algorithm
     print("Initializing Bi-level RL algorithm...")
@@ -55,9 +66,9 @@ def main():
         feature_fn=feature_fn,  # Use one-hot feature function for MDCE IRL
         discount_leader=0.99,
         discount_follower=0.8,  # RESTORED: 0.8 changes the problem definition
-        learning_rate_leader_actor=1e-5,   # Leader Actor (Policy) learning rate
+        learning_rate_leader_actor=1e-5,  # Leader Actor (Policy) learning rate
         learning_rate_leader_critic=1e-4,  # Leader Critic (Q-table) learning rate
-        learning_rate_follower=0.01,  # REDUCED: 0.2 was too high, caused rapid descent from optimistic init
+        learning_rate_follower=0.01,
         mdce_irl_config={
             "max_iterations": 1000,
             "tolerance": 0.01,  # REDUCED: 50% → 10% for better FEV matching (more realistic than 5%)
@@ -79,8 +90,8 @@ def main():
     stats = algo.train(
         env=env,
         n_leader_iterations=100,
-        n_follower_iterations=500,
-        n_episodes_per_iteration=1000,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
+        n_follower_iterations=300,
+        n_episodes_per_iteration=500,  # REALISTIC: 1000 episodes = 100k steps, each of 18 pairs visited ~5,500 times
         verbose=True,
     )
 
@@ -89,7 +100,7 @@ def main():
 
     # Save statistics
 
-    output_dir = Path("data/internal/vstruefollower")
+    output_dir = Path("data/internal/test1")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stats_path = output_dir / "training_stats.pkl"
