@@ -1677,22 +1677,6 @@ class BilevelRL:
             policy_gradients = gradient_info.get("policy_gradients")
 
             if policy_gradients is not None:
-                # # === [追加] 勾配クリッピング (Clip by Global Norm) ===
-                # # 勾配全体のL2ノルムを計算
-                # total_norm = np.linalg.norm(policy_gradients)
-                # max_grad_norm = 1.0  # 許容する最大ノルム (調整パラメータ)
-
-                # # ノルムが上限を超えていたら、スケーリングして縮小する
-                # if total_norm > max_grad_norm:
-                #     clip_coef = max_grad_norm / (total_norm + 1e-6)
-                #     # 勾配を上書きして縮小する
-                #     policy_gradients = policy_gradients * clip_coef
-
-                #     # (デバッグ用) ログ出力
-                #     # print(f"Gradient clipped: {total_norm:.2f} -> {max_grad_norm}")
-                # # ===================================================
-
-                # Update policy: π_L^{n+1} ← π_L^n + α_L * ∇_{π_L} J_L
                 # ※ ここは元のまま（確率の直接更新）
                 self.leader_policy_table = self.leader_policy_table + self.learning_rate_leader_actor * policy_gradients
 
@@ -1709,6 +1693,8 @@ class BilevelRL:
                         # If all probabilities are zero or negative, reset to uniform
                         num_actions = self.leader_policy_table.shape[1]
                         self.leader_policy_table[state] = np.ones(num_actions) / num_actions
+
+                self.leader_policy_obj.policy_table = self.leader_policy_table
 
     def train(
         self,
