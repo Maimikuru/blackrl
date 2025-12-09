@@ -62,14 +62,14 @@ def main():
     common_params = {
         "discount_leader": 0.99,
         "discount_follower": 0.8,
-        "learning_rate_leader_actor": 1e-2,
-        "learning_rate_leader_critic": 1e-1,
+        "learning_rate_leader_actor": 1e-4,
+        "learning_rate_leader_critic": 1e-3,
         "learning_rate_follower": 0.01,
         "mdce_irl_config": {
-            "max_iterations": 10,
+            "max_iterations": 100,
             "tolerance": 0.01,
-            "n_soft_q_iterations": 100,
-            "n_monte_carlo_samples": 1000,
+            "n_soft_q_iterations": 300,
+            "n_monte_carlo_samples": 10000,
             "n_jobs": -1,
         },
         "soft_q_config": {
@@ -81,9 +81,9 @@ def main():
 
     # 学習の長さ
     train_params = {
-        "n_leader_iterations": 10,  # テスト用。本番は1000推奨
+        "n_leader_iterations": 1000,  # テスト用。本番は1000推奨
         "n_follower_iterations": 500,
-        "n_episodes_per_iteration": 10,
+        "n_episodes_per_iteration": 1000,
         "verbose": True,
     }
     # -------------------------------------------------
@@ -134,7 +134,7 @@ def main():
     print("  -> Done. Final Return:", stats_svi["leader_return"][-1])
 
     # === 保存とプロット ===
-    output_dir = Path("data/internal/test1_3base")
+    output_dir = Path("data/internal/test1")
     output_dir.mkdir(exist_ok=True)
 
     # 全結果を保存
