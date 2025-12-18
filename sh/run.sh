@@ -12,7 +12,7 @@ echo "Starting Parallel Experiments..."
 echo "Working directory: $(pwd)"
 
 # ログディレクトリを作成
-LOG_DIR="data/internal/parallel_exp"
+LOG_DIR="data/internal/same"
 mkdir -p "$LOG_DIR"
 
 # 3つの実験をバックグラウンド (&) で並列実行
@@ -58,4 +58,4 @@ echo "All experiments finished!"
 echo "Generating plots..."
 uv run python scripts/runrun.py --mode plot
 
-echo "Done! Check data/internal/parallel_exp/comparison_curves.png"
+echo "Done! Check data/internal/same/comparison_curves.png"

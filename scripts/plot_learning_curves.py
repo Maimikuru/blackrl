@@ -56,47 +56,27 @@ def plot_learning_curves(stats, save_path=None, baselines=None):
 
     # --- Plot 2: IRL Delta FEM (Main Method only) ---
     ax = axes[0, 1]
-    if "irl_delta_fem" in stats:
-        # データ構造の正規化: リストのリストになっている場合と、フラットなリストの場合がある
-        raw_data = stats["irl_delta_fem"]
-        deltas = []
-
-        # ネストされている場合（各イテレーションで複数ステップIRLが走った場合など）
-        if len(raw_data) > 0 and isinstance(raw_data[0], list):
-            for sublist in raw_data:
-                deltas.extend(sublist)
-        else:
-            deltas = raw_data
-
-        if len(deltas) > 0:
-            ax.plot(deltas, "g-", linewidth=1.5, label="Delta FEM")
-            ax.axhline(y=0.01, color="r", linestyle="--", alpha=0.5, label="Threshold (0.01)")
-            ax.set_yscale("log")
-            ax.set_xlabel("IRL Steps (Cumulative)")
-            ax.set_ylabel("Max Absolute Error")
-            ax.set_title("IRL Feature Matching Error", fontsize=14, fontweight="bold")
-            ax.legend()
-        else:
-            ax.text(0.5, 0.5, "No IRL Delta Data", ha="center", va="center")
+    if "irl_delta_fem" in stats and len(stats["irl_delta_fem"]) > 0:
+        ax.plot(stats["irl_delta_fem"], "g-", linewidth=1.5)
+        ax.axhline(y=0.01, color="r", linestyle="--", alpha=0.5, label="Threshold (0.01)")
+        ax.set_yscale("log")
+        ax.set_xlabel("IRL Iteration")
+        ax.set_ylabel("Delta FEM")
+        ax.set_title("IRL Feature Matching Error", fontsize=14, fontweight="bold")
+        ax.legend()
     else:
         ax.text(0.5, 0.5, "No IRL Delta Data", ha="center", va="center")
 
-    # --- Plot 3: IRL Likelihood (Main Method only) ---
+    # --- Plot 3: IRL Gradient Norm (Main Method only) ---
     ax = axes[0, 2]
-    if "irl_likelihood" in stats and len(stats["irl_likelihood"]) > 0:
-        # (iteration, value) のタプルか、単なる値かを確認
-        sample = stats["irl_likelihood"][0]
-        if isinstance(sample, (list, tuple)) and len(sample) == 2:
-            iters = [x[0] for x in stats["irl_likelihood"]]
-            vals = [x[1] for x in stats["irl_likelihood"]]
-            ax.plot(iters, vals, "purple", linewidth=1.5, marker="o", markersize=3)
-        else:
-            ax.plot(stats["irl_likelihood"], "purple", linewidth=1.5)
-
-        ax.set_xlabel("Leader Iteration")
-        ax.set_title("IRL Log Likelihood", fontsize=14, fontweight="bold")
+    if "irl_gradient_norm" in stats and len(stats["irl_gradient_norm"]) > 0:
+        ax.plot(stats["irl_gradient_norm"], "purple", linewidth=1.5)
+        ax.set_yscale("log")
+        ax.set_xlabel("IRL Iteration")
+        ax.set_ylabel("Gradient Norm")
+        ax.set_title("IRL Gradient Norm", fontsize=14, fontweight="bold")
     else:
-        ax.text(0.5, 0.5, "No Likelihood Data", ha="center", va="center")
+        ax.text(0.5, 0.5, "No IRL Gradient Data", ha="center", va="center")
 
     # --- Plot 4: Leader Gradient Norm (Main Method) ---
     ax = axes[1, 0]
@@ -110,8 +90,10 @@ def plot_learning_curves(stats, save_path=None, baselines=None):
 
     # --- Plot 5: Leader Q-Values (Main Method) ---
     ax = axes[1, 1]
-    if "leader_mean_q_value" in stats and len(stats["leader_mean_q_value"]) > 0:
-        ax.plot(stats["leader_mean_q_value"], "c-", linewidth=2)
+    # "mean_q_value" または "leader_mean_q_value" を使用
+    q_key = "mean_q_value" if "mean_q_value" in stats else "leader_mean_q_value"
+    if q_key in stats and len(stats[q_key]) > 0:
+        ax.plot(stats[q_key], "c-", linewidth=2)
         ax.set_xlabel("Leader Iteration")
         ax.set_title("Leader Mean Q-Value (Proposed)", fontsize=14, fontweight="bold")
     else:

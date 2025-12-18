@@ -850,6 +850,11 @@ class BilevelRL:
 
             # 絶対誤差で収束判定
             delta_fem = torch.max(torch.abs(gradient)).item()
+            gradient_norm = torch.norm(gradient).item()
+
+            # stats に記録
+            self.stats["irl_delta_fem"].append(delta_fem)
+            self.stats["irl_gradient_norm"].append(gradient_norm)
 
             lr = 0.1 / (1.0 + 0.01 * irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + lr * gradient
@@ -1438,9 +1443,9 @@ class BilevelRL:
         second_term_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
 
         # Get β_F (temperature parameter from Soft Q-Learning)
-        beta_F = 1.0  # Default temperature
-        if self.soft_q_learning is not None:
-            beta_F = self.soft_q_learning.temperature
+        beta_F = 5.0 * 1e-2  # Default temperature
+        # if self.soft_q_learning is not None:
+        #     beta_F = self.soft_q_learning.temperature
 
         # Accumulate gradients per (state, action) pair
         for i in range(len(obs)):
