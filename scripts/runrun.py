@@ -40,14 +40,14 @@ def feature_fn(state, leader_action, follower_action):
 # === 設定 (共通) ===
 COMMON_PARAMS = {
     "discount_leader": 0.99,
-    "discount_follower": 0.8,
-    "learning_rate_leader_actor": 1e-2,  # 修正済みの学習率
-    "learning_rate_leader_critic": 1e-1,
+    "discount_follower": 0.99,
+    "learning_rate_leader_actor": 1e-3,  # 修正済みの学習率
+    "learning_rate_leader_critic": 1e-4,
     "learning_rate_follower": 0.01,
     "mdce_irl_config": {
         "max_iterations": 1000,
         "tolerance": 0.01,
-        "n_soft_q_iterations": 1000,
+        "n_soft_q_iterations": 2000,
         "n_monte_carlo_samples": 5000,  # SFを使うなら無視されますが念のため
         "n_jobs": -1,
     },
@@ -66,11 +66,16 @@ TRAIN_PARAMS = {
     "verbose": True,
 }
 
-OUTPUT_DIR = Path("data/internal/parallel_exp")
+DEFAULT_OUTPUT_DIR = Path("data/internal/ex")
 
 
-def run_experiment(mode):
+def run_experiment(mode, output_dir=None):
     """指定されたモードの実験を1つだけ実行して保存する"""
+    if output_dir is None:
+        output_dir = DEFAULT_OUTPUT_DIR
+    else:
+        output_dir = Path(output_dir)
+
     print(f"\n=== Starting Experiment: {mode} ===")
 
     env = DiscreteToyEnvPaper()
@@ -85,33 +90,41 @@ def run_experiment(mode):
 
     # 学習実行
     # mode が "irl" のときは oracle_mode="none" を渡す
-    oracle_arg = "none" if mode == "irl" else mode
+    # mode が "irl_no_second_term" のときは第2項を計算しない
+    oracle_arg = "none" if mode == "irl" or mode == "irl_no_second_term" else mode
+    use_second_term = mode != "irl_no_second_term"
 
-    stats = algo.train(env=env, oracle_mode=oracle_arg, **TRAIN_PARAMS)
+    stats = algo.train(env=env, oracle_mode=oracle_arg, use_second_term=use_second_term, **TRAIN_PARAMS)
 
     # 結果保存
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    save_path = OUTPUT_DIR / f"stats_{mode}.pkl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_path = output_dir / f"stats_{mode}.pkl"
     with open(save_path, "wb") as f:
         pickle.dump(stats, f)
 
     print(f"=== Finished {mode}. Saved to {save_path} ===")
 
 
-def merge_and_plot():
+def merge_and_plot(output_dir=None):
     """保存された結果を読み込んでプロットする"""
-    print("\n=== Merging Results and Plotting ===")
+    if output_dir is None:
+        output_dir = DEFAULT_OUTPUT_DIR
+    else:
+        output_dir = Path(output_dir)
+
+    print(f"\n=== Merging Results and Plotting (from {output_dir}) ===")
     results = {}
 
     # 読み込みマッピング
     modes = {
         "irl": "Proposed (IRL)",
+        "irl_no_second_term": "Proposed (IRL, no 2nd term)",
         "softql": "Oracle (SoftQL)",
         "softvi": "Oracle (SoftVI)",
     }
 
     for mode_key, mode_name in modes.items():
-        path = OUTPUT_DIR / f"stats_{mode_key}.pkl"
+        path = output_dir / f"stats_{mode_key}.pkl"
         if path.exists():
             with open(path, "rb") as f:
                 results[mode_name] = pickle.load(f)
@@ -128,20 +141,21 @@ def merge_and_plot():
     main_stats = results.get("Proposed (IRL)", {})
     baselines = {k: v for k, v in results.items() if k != "Proposed (IRL)"}
 
-    save_path = OUTPUT_DIR / "comparison_curves.png"
+    save_path = output_dir / "comparison_curves.png"
     plot_learning_curves(main_stats, save_path=save_path, baselines=baselines)
     print(f"Plot saved to: {save_path}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, choices=["irl", "softql", "softvi", "plot"], required=True)
+    parser.add_argument("--mode", type=str, choices=["irl", "irl_no_second_term", "softql", "softvi", "plot"], required=True)
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for stats and plots")
     args = parser.parse_args()
 
     if args.mode == "plot":
-        merge_and_plot()
+        merge_and_plot(args.output_dir)
     else:
-        run_experiment(args.mode)
+        run_experiment(args.mode, args.output_dir)
 
 
 if __name__ == "__main__":

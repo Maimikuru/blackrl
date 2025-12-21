@@ -877,7 +877,36 @@ class BilevelRL:
                 print(f"  Std:  {np.std(q_vals):8.4f}")
                 print()
 
-                # 2. その他の情報
+                # 2. 推定報酬関数の表示
+                def reward_fn(state, leader_action, follower_action):
+                    """Compute reward r_F(s, a, b) = w^T φ(s, a, b)."""
+                    phi = self.mdce_irl.feature_fn(state, leader_action, follower_action)
+                    if isinstance(phi, np.ndarray):
+                        phi = torch.from_numpy(phi).float()
+                    elif not isinstance(phi, torch.Tensor):
+                        phi = torch.tensor(phi, dtype=torch.float32)
+                    return torch.dot(self.mdce_irl.w, phi).item()
+
+                print(f"\n--- IRL iteration {irl_iteration}: Estimated Reward Function r_F(s, a, b) = w^T φ ---")
+                self._display_learned_rewards(reward_fn)
+
+                # 3. 報酬パラメータwの表示
+                w_np = self.mdce_irl.w.detach().cpu().numpy()
+                w_norm = torch.norm(self.mdce_irl.w).item()
+                print(f"\n--- IRL iteration {irl_iteration}: Reward Parameters w (||w||={w_norm:.4f}) ---")
+                print(f"  w = {w_np}")
+                # 特徴量がone-hotの場合の解釈
+                if len(w_np) == 18:  # 3 states × 2 leader actions × 3 follower actions
+                    print("  Interpretation (one-hot features):")
+                    idx = 0
+                    for s in range(3):
+                        for a in range(2):
+                            for b in range(3):
+                                print(f"    w[{idx:2d}] (s={s}, a={a}, b={b}): {w_np[idx]:8.4f}")
+                                idx += 1
+                print()
+
+                # 4. その他の情報
                 gradient_norm = torch.norm(gradient).item()
 
                 # 尤度計算用の policy_fn ラッパー
@@ -902,6 +931,40 @@ class BilevelRL:
                     print("\n" + "=" * 80)
                     print("MDCE IRL CONVERGED - FINAL STATISTICS")
                     print("=" * 80)
+
+                    # 最終的な推定報酬関数の表示
+                    def final_reward_fn(state, leader_action, follower_action):
+                        """Compute final reward r_F(s, a, b) = w^T φ(s, a, b)."""
+                        phi = self.mdce_irl.feature_fn(state, leader_action, follower_action)
+                        if isinstance(phi, np.ndarray):
+                            phi = torch.from_numpy(phi).float()
+                        elif not isinstance(phi, torch.Tensor):
+                            phi = torch.tensor(phi, dtype=torch.float32)
+                        return torch.dot(self.mdce_irl.w, phi).item()
+
+                    print("\n" + "=" * 80)
+                    print("FINAL ESTIMATED REWARD FUNCTION: r_F(s, a, b) = w^T φ")
+                    print("=" * 80)
+                    self._display_learned_rewards(final_reward_fn)
+
+                    # 最終的な報酬パラメータwの表示
+                    w_np = self.mdce_irl.w.detach().cpu().numpy()
+                    w_norm = torch.norm(self.mdce_irl.w).item()
+                    print("\n" + "=" * 80)
+                    print(f"FINAL REWARD PARAMETERS w (||w||={w_norm:.6f})")
+                    print("=" * 80)
+                    print(f"w = {w_np}")
+                    # 特徴量がone-hotの場合の解釈
+                    if len(w_np) == 18:  # 3 states × 2 leader actions × 3 follower actions
+                        print("\nInterpretation (one-hot features):")
+                        idx = 0
+                        for s in range(3):
+                            for a in range(2):
+                                for b in range(3):
+                                    print(f"  w[{idx:2d}] (s={s}, a={a}, b={b}): {w_np[idx]:10.6f}")
+                                    idx += 1
+                    print("=" * 80)
+
                     # 最終的なQ値を計算してモデルにセットしておく（後の評価用）
                     # self.soft_q_learning に SFベースのQ値をセットする等の処理が必要ならここで行う
                 break
@@ -1374,7 +1437,7 @@ class BilevelRL:
                     target_q_values[i] - current_q
                 )
 
-    def _estimate_leader_gradient(self, replay_buffer, batch_size: int = 64):
+    def _estimate_leader_gradient(self, replay_buffer, batch_size: int = 64, use_second_term: bool = True):
         """Estimate leader's policy gradient using Equation 5.20.
 
         Implements the full gradient formula (Equation 5.20):
@@ -1391,6 +1454,7 @@ class BilevelRL:
         Args:
             replay_buffer: Replay buffer containing transitions
             batch_size: Batch size for gradient estimation
+            use_second_term: If False, only compute first term (standard policy gradient)
 
         Returns:
             Dictionary with gradient information and policy gradients
@@ -1457,58 +1521,59 @@ class BilevelRL:
             # For tabular policy, gradient w.r.t. π_L[s, a] is Q-value
             first_term_gradients[state, action] += q_val
 
-            # Second term: Follower influence term
-            # Compute E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
-            follower_probs = self._get_follower_action_probs(state, action)
-            num_follower_actions = len(follower_probs)
-            expected_q_follower = 0.0
-            for b in range(num_follower_actions):
-                expected_q_follower += follower_probs[b] * self.leader_q_table[state, action, b]
+            # Second term: Follower influence term (only if use_second_term=True)
+            if use_second_term:
+                # Compute E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
+                follower_probs = self._get_follower_action_probs(state, action)
+                num_follower_actions = len(follower_probs)
+                expected_q_follower = 0.0
+                for b in range(num_follower_actions):
+                    expected_q_follower += follower_probs[b] * self.leader_q_table[state, action, b]
 
-            # Benefit: Q_L(s, a, b) - E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
-            benefit = q_val - expected_q_follower
+                # Benefit: Q_L(s, a, b) - E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
+                benefit = q_val - expected_q_follower
 
-            # Influence: E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ, ȧ) | s, a, b ]
-            # This is computed using the subsequence starting from (s, a, b)
-            influence_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
+                # Influence: E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ, ȧ) | s, a, b ]
+                # This is computed using the subsequence starting from (s, a, b)
+                influence_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
 
-            if self.soft_q_learning is not None and subsequences is not None:
-                # Get subsequence for this sample
-                subseq_obs = subsequences["observation"][i]
-                subseq_leader_acts = subsequences["leader_action"][i]
+                if self.soft_q_learning is not None and subsequences is not None:
+                    # Get subsequence for this sample
+                    subseq_obs = subsequences["observation"][i]
+                    subseq_leader_acts = subsequences["leader_action"][i]
 
-                # Convert to numpy arrays if needed
-                if isinstance(subseq_obs, torch.Tensor):
-                    subseq_obs = subseq_obs.cpu().numpy()
-                if isinstance(subseq_leader_acts, torch.Tensor):
-                    subseq_leader_acts = subseq_leader_acts.cpu().numpy()
+                    # Convert to numpy arrays if needed
+                    if isinstance(subseq_obs, torch.Tensor):
+                        subseq_obs = subseq_obs.cpu().numpy()
+                    if isinstance(subseq_leader_acts, torch.Tensor):
+                        subseq_leader_acts = subseq_leader_acts.cpu().numpy()
 
-                subseq_obs = subseq_obs.flatten().astype(int)
-                subseq_leader_acts = subseq_leader_acts.flatten().astype(int)
+                    subseq_obs = subseq_obs.flatten().astype(int)
+                    subseq_leader_acts = subseq_leader_acts.flatten().astype(int)
 
-                # Compute conditional expectation over subsequence
-                # E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F^soft(ṡ, ȧ) | s, a, b ]
-                for t, (s_dot, a_dot) in enumerate(zip(subseq_obs, subseq_leader_acts, strict=True)):
-                    # Compute V_F^soft(ṡ, ȧ)
-                    v_f_soft = self.soft_q_learning.compute_soft_value(s_dot, a_dot)
+                    # Compute conditional expectation over subsequence
+                    # E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F^soft(ṡ, ȧ) | s, a, b ]
+                    for t, (s_dot, a_dot) in enumerate(zip(subseq_obs, subseq_leader_acts, strict=True)):
+                        # Compute V_F^soft(ṡ, ȧ)
+                        v_f_soft = self.soft_q_learning.compute_soft_value(s_dot, a_dot)
 
-                    # For tabular policy: ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) is 1/π_L(ȧ|ṡ)
-                    # So gradient w.r.t. π_L[ṡ, ȧ] is: V_F^soft(ṡ, ȧ) / π_L(ȧ|ṡ)
-                    # We accumulate V_F^soft(ṡ, ȧ) and normalize later
+                        # For tabular policy: ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) is 1/π_L(ȧ|ṡ)
+                        # So gradient w.r.t. π_L[ṡ, ȧ] is: V_F^soft(ṡ, ȧ) / π_L(ȧ|ṡ)
+                        # We accumulate V_F^soft(ṡ, ȧ) and normalize later
 
-                    # Discount by γ_F^t
-                    discount_factor = self.discount_follower**t
-                    influence_gradients[s_dot, a_dot] += discount_factor * v_f_soft
+                        # Discount by γ_F^t
+                        discount_factor = self.discount_follower**t
+                        influence_gradients[s_dot, a_dot] += discount_factor * v_f_soft
 
-                # Normalize by (1 - γ_F) for discounted state distribution expectation
-                # This is part of the d_{γ_F} normalization
-                if len(subseq_obs) > 0:
-                    influence_gradients = influence_gradients / (1.0 - self.discount_follower)
+                    # Normalize by (1 - γ_F) for discounted state distribution expectation
+                    # This is part of the d_{γ_F} normalization
+                    if len(subseq_obs) > 0:
+                        influence_gradients = influence_gradients / (1.0 - self.discount_follower)
 
-            # Second term contribution
-            # benefit * influence_gradients / β_F
-            # Note: We already divided by (1-γ_F) in influence_gradients computation
-            second_term_gradients += benefit * influence_gradients / beta_F
+                # Second term contribution
+                # benefit * influence_gradients / β_F
+                # Note: We already divided by (1-γ_F) in influence_gradients computation
+                second_term_gradients += benefit * influence_gradients / beta_F
 
         # Normalize by number of samples per (state, action)
         state_action_counts = np.zeros_like(self.leader_policy_obj.policy_table)
@@ -1524,14 +1589,16 @@ class BilevelRL:
 
         # Normalize each term by (1 - γ_L) separately for analysis
         first_term_normalized = first_term_gradients / (1.0 - self.discount_leader)
-        second_term_normalized = second_term_gradients / (1.0 - self.discount_leader)
+        second_term_normalized = (
+            second_term_gradients / (1.0 - self.discount_leader) if use_second_term else np.zeros_like(first_term_normalized)
+        )
 
-        # Combine terms
-        policy_gradients = first_term_normalized + second_term_normalized
+        # Combine terms (only first term if use_second_term=False)
+        policy_gradients = first_term_normalized + (second_term_normalized if use_second_term else 0)
 
         # Compute norms for each term
         first_term_norm = np.linalg.norm(first_term_normalized)
-        second_term_norm = np.linalg.norm(second_term_normalized)
+        second_term_norm = np.linalg.norm(second_term_normalized) if use_second_term else 0.0
         gradient_norm = np.linalg.norm(policy_gradients)
 
         # Compute advantages for statistics
@@ -1560,6 +1627,12 @@ class BilevelRL:
         # Log gradient information (既存のログ処理)
         self.stats.setdefault("gradient_norm", []).append(
             gradient_info.get("gradient_norm", 0.0),
+        )
+        self.stats.setdefault("first_term_norm", []).append(
+            gradient_info.get("first_term_norm", 0.0),
+        )
+        self.stats.setdefault("second_term_norm", []).append(
+            gradient_info.get("second_term_norm", 0.0),
         )
         self.stats.setdefault("mean_q_value", []).append(
             gradient_info.get("mean_q_value", 0.0),
@@ -1602,6 +1675,7 @@ class BilevelRL:
         replay_buffer_size: int = 100000000,
         oracle_mode: str = "none",  # "none", "softql", "softvi"
         mdce_irl_frequency: int = 10,
+        use_second_term: bool = True,  # If False, only use first term (standard policy gradient)
         verbose: bool = True,
     ):
         """Train the bi-level RL algorithm."""
@@ -1906,12 +1980,46 @@ class BilevelRL:
             if replay_buffer._current_size > 0:
                 if verbose:
                     print("Step 4: Estimating leader's gradient...")
-                gradient_info = self._estimate_leader_gradient(replay_buffer)
+                gradient_info = self._estimate_leader_gradient(replay_buffer, use_second_term=use_second_term)
 
-                # Log metrics...
+                # Log metrics and print gradient details
                 if gradient_info:
                     self.stats["leader_gradient_norm"].append(gradient_info.get("gradient_norm", 0.0))
-                    # ... (ログ出力省略) ...
+
+                    if verbose:
+                        first_term_norm = gradient_info.get("first_term_norm", 0.0)
+                        second_term_norm = gradient_info.get("second_term_norm", 0.0)
+                        total_norm = gradient_info.get("gradient_norm", 0.0)
+                        mean_q = gradient_info.get("mean_q_value", 0.0)
+                        mean_adv = gradient_info.get("mean_advantage", 0.0)
+
+                        print(f"  Gradient Norm: {total_norm:.6f}")
+                        print(
+                            f"    Term 1 (policy gradient): {first_term_norm:.6f} ({100 * first_term_norm / total_norm if total_norm > 0 else 0:.1f}%)",
+                        )
+                        print(
+                            f"    Term 2 (follower influence): {second_term_norm:.6f} ({100 * second_term_norm / total_norm if total_norm > 0 else 0:.1f}%)",
+                        )
+                        print(f"  Mean Q-value: {mean_q:.6f}")
+                        print(f"  Mean Advantage: {mean_adv:.6f}")
+
+                        # Print policy gradients for each state-action pair
+                        policy_gradients = gradient_info.get("policy_gradients")
+                        if policy_gradients is not None and self._use_tabular_policy and self.leader_policy_table is not None:
+                            print("  Policy Gradients (per state-action):")
+                            num_states = policy_gradients.shape[0]
+                            num_actions = policy_gradients.shape[1]
+                            for s in range(num_states):
+                                print(f"    State {s}:")
+                                for a in range(num_actions):
+                                    grad_val = policy_gradients[s, a]
+                                    current_prob = self.leader_policy_table[s, a]
+                                    # Calculate update amount
+                                    update_amount = self.learning_rate_leader_actor * grad_val
+                                    new_prob = current_prob + update_amount
+                                    print(
+                                        f"      Action {a}: grad={grad_val:8.4f}, current_π={current_prob:.4f}, update={update_amount:+.4f}, new_π≈{new_prob:.4f}",
+                                    )
 
             # Step 5: Update leader's Actor
             if verbose:
