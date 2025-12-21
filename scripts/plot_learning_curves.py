@@ -88,16 +88,20 @@ def plot_learning_curves(stats, save_path=None, baselines=None):
     else:
         ax.text(0.5, 0.5, "No Gradient Data", ha="center", va="center")
 
-    # --- Plot 5: Leader Q-Values (Main Method) ---
+    # --- Plot 5: IRL Q-Values (Main Method) ---
     ax = axes[1, 1]
-    # "mean_q_value" または "leader_mean_q_value" を使用
-    q_key = "mean_q_value" if "mean_q_value" in stats else "leader_mean_q_value"
-    if q_key in stats and len(stats[q_key]) > 0:
-        ax.plot(stats[q_key], "c-", linewidth=2)
-        ax.set_xlabel("Leader Iteration")
-        ax.set_title("Leader Mean Q-Value (Proposed)", fontsize=14, fontweight="bold")
+    if "irl_q_value_mean" in stats and len(stats["irl_q_value_mean"]) > 0:
+        ax.plot(stats["irl_q_value_mean"], "c-", linewidth=2, label="Mean")
+        if "irl_q_value_min" in stats and len(stats["irl_q_value_min"]) > 0:
+            ax.plot(stats["irl_q_value_min"], "c--", linewidth=1, alpha=0.5, label="Min")
+        if "irl_q_value_max" in stats and len(stats["irl_q_value_max"]) > 0:
+            ax.plot(stats["irl_q_value_max"], "c--", linewidth=1, alpha=0.5, label="Max")
+        ax.set_xlabel("IRL Iteration")
+        ax.set_ylabel("Q-Value")
+        ax.set_title("IRL Q-Values (Follower)", fontsize=14, fontweight="bold")
+        ax.legend()
     else:
-        ax.text(0.5, 0.5, "No Q-Value Data", ha="center", va="center")
+        ax.text(0.5, 0.5, "No IRL Q-Value Data", ha="center", va="center")
 
     # --- Plot 6: Summary Text ---
     ax = axes[1, 2]

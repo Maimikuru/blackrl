@@ -41,13 +41,13 @@ def feature_fn(state, leader_action, follower_action):
 COMMON_PARAMS = {
     "discount_leader": 0.99,
     "discount_follower": 0.99,
-    "learning_rate_leader_actor": 1e-3,  # 修正済みの学習率
-    "learning_rate_leader_critic": 1e-4,
+    "learning_rate_leader_actor": 1e-4,  # 修正済みの学習率
+    "learning_rate_leader_critic": 1e-3,
     "learning_rate_follower": 0.01,
     "mdce_irl_config": {
         "max_iterations": 1000,
         "tolerance": 0.01,
-        "n_soft_q_iterations": 2000,
+        "n_soft_q_iterations": 1000,
         "n_monte_carlo_samples": 5000,  # SFを使うなら無視されますが念のため
         "n_jobs": -1,
     },

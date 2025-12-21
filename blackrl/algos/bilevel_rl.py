@@ -852,24 +852,28 @@ class BilevelRL:
             delta_fem = torch.max(torch.abs(gradient)).item()
             gradient_norm = torch.norm(gradient).item()
 
+            # Q値統計の計算 (SFから復元) - 毎回記録
+            q_vals = []
+            for s in range(self.env_spec.observation_space.n):
+                for la in range(self.env_spec.leader_action_space.n):
+                    for fa in range(self.env_spec.action_space.n):
+                        q = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
+                        q_vals.append(q)
+            q_vals = np.array(q_vals)
+
             # stats に記録
             self.stats["irl_delta_fem"].append(delta_fem)
             self.stats["irl_gradient_norm"].append(gradient_norm)
+            self.stats["irl_q_value_mean"].append(float(np.mean(q_vals)))
+            self.stats["irl_q_value_min"].append(float(np.min(q_vals)))
+            self.stats["irl_q_value_max"].append(float(np.max(q_vals)))
+            self.stats["irl_q_value_std"].append(float(np.std(q_vals)))
 
             lr = 0.1 / (1.0 + 0.01 * irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + lr * gradient
 
             # --- ログ表示の復元 ---
             if verbose and (irl_iteration % 10 == 0):
-                # 1. Q値統計の計算 (SFから復元)
-                q_vals = []
-                for s in range(self.env_spec.observation_space.n):
-                    for la in range(self.env_spec.leader_action_space.n):
-                        for fa in range(self.env_spec.action_space.n):
-                            q = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
-                            q_vals.append(q)
-                q_vals = np.array(q_vals)
-
                 print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning (via SF) Statistics ---")
                 print(f"  Min:  {np.min(q_vals):8.4f}")
                 print(f"  Max:  {np.max(q_vals):8.4f}")
@@ -968,6 +972,30 @@ class BilevelRL:
                     # 最終的なQ値を計算してモデルにセットしておく（後の評価用）
                     # self.soft_q_learning に SFベースのQ値をセットする等の処理が必要ならここで行う
                 break
+
+        # ★追加: IRLの結果をフォロワーモデルに反映
+        # SFからQ値を計算してFollowerPolicyModelにセット
+        if verbose:
+            print("\nUpdating follower policy with estimated reward...")
+
+        # SFからQ値を計算
+        Q_learned = {}
+        for s in range(self.env_spec.observation_space.n):
+            Q_learned[(s,)] = {}
+            for la in range(self.env_spec.leader_action_space.n):
+                Q_learned[(s,)][(la,)] = {}
+                for fa in range(self.env_spec.action_space.n):
+                    q_val = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
+                    Q_learned[(s,)][(la,)][(fa,)] = q_val
+
+        # FollowerPolicyModelにセット
+        temperature = self.soft_q_config.get("temperature", 1.0)
+        if self.soft_q_learning is None or not isinstance(self.soft_q_learning, FollowerPolicyModel):
+            self.soft_q_learning = FollowerPolicyModel(self.env_spec, temperature)
+        self.soft_q_learning.set_q_values(Q_learned)
+
+        if verbose:
+            print("Follower policy updated with IRL-estimated reward.")
 
         return self.mdce_irl.w
 
@@ -1365,7 +1393,11 @@ class BilevelRL:
             obs = samples["observation"]
             leader_acts = samples["leader_action"]
             follower_acts = samples["action"]
-            rewards = samples["leader_reward"]  # Leader's reward
+            # Check if leader_reward exists in samples, otherwise use reward
+            if "leader_reward" in samples:
+                rewards = samples["leader_reward"]  # Leader's reward
+            else:
+                rewards = samples.get("reward", np.zeros_like(obs))  # Fallback to follower reward
             next_obs = samples["next_observation"]
             terminals = samples["terminal"]
 
@@ -1811,9 +1843,10 @@ class BilevelRL:
                 self.true_follower_model = FollowerPolicyModel(self.env_spec, temperature)
                 self.true_follower_model.set_q_values(Q_softvi)
 
-                # Initialize Learner Model (starts with true Q, will be updated by IRL)
+                # Initialize Learner Model (starts empty, will be updated by IRL)
+                # ★修正: 正解のQ値をセットしない（カンニング防止）
                 self.soft_q_learning = FollowerPolicyModel(self.env_spec, temperature)
-                self.soft_q_learning.set_q_values(Q_softvi)
+                # self.soft_q_learning.set_q_values(Q_softvi)  # 削除：IRLで学習するまで空のまま
 
                 def follower_policy_fn(obs, leader_act, deterministic=False):
                     # (Same logic as above)
@@ -1921,6 +1954,7 @@ class BilevelRL:
             # ===============================================================
 
             # IRLを実行するタイミングかどうか
+            # ★修正: mdce_irl_frequencyに従って実行
             should_run_mdce_irl = iteration == 0
 
             if oracle_mode == "none" and should_run_mdce_irl:
@@ -1934,25 +1968,7 @@ class BilevelRL:
                     verbose=verbose,
                 )
 
-            # ===============================================================
-            # Phase C: IRL実行 (Step 2) - Proposedモードのみ
-            # ===============================================================
-
-            # IRLを実行するタイミングかどうか
-            should_run_mdce_irl = iteration == 0
-
-            if oracle_mode == "none" and should_run_mdce_irl:
-                if verbose:
-                    print("Step 2: Generating expert trajectories & Running MDCE IRL...")
-
-                # Generate expert trajectories (Current Leader vs Optimal Follower)
-                current_expert_trajectories = self._generate_expert_trajectories(
-                    env,
-                    n_trajectories=n_episodes_per_iteration,
-                    verbose=verbose,
-                )
-
-                # Run MDCE IRL
+                # Run MDCE IRL (内部でフォロワーモデルに反映される)
                 self.estimate_follower_reward(current_expert_trajectories, env, verbose=verbose)
 
                 # Debug Display
@@ -1960,7 +1976,8 @@ class BilevelRL:
                     self._display_follower_q_values(env=env, show_true_q=False)
 
             elif oracle_mode == "none" and verbose:
-                print(f"Step 2: Skipping MDCE IRL (Next: {((iteration // mdce_irl_frequency) + 1) * mdce_irl_frequency})")
+                next_irl_iter = ((iteration // mdce_irl_frequency) + 1) * mdce_irl_frequency
+                print(f"Step 2: Skipping MDCE IRL (Next: iteration {next_irl_iter})")
 
             # ===============================================================
             # Phase D: リーダーの学習 (Step 3-5) - 共通
