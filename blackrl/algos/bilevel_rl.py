@@ -1468,28 +1468,7 @@ class BilevelRL:
                 )
 
     def _estimate_leader_gradient(self, replay_buffer, batch_size: int = 64, use_second_term: bool = True):
-        """Estimate leader's policy gradient using Equation 5.20.
-
-        Implements the full gradient formula (Equation 5.20):
-        ∇_{θ_L} J_L(θ_L) = [1/(1-γ_L)] E_{d_{γ_L}} [
-            ∇_{θ_L} log f_{θ_L}(a|s) Q_L(s, a, b)
-            + [1/(β_F(1-γ_F))] (Q_L(s,a,b) - E_{b~g}[Q_L(s,a,b)])
-            * E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ,ȧ) | s,a,b ]
-        ]
-
-        For tabular policy π_L[s, a], we approximate this as:
-        ∇_{π_L[s, a]} J_L ≈ E[Q_L(s, a, b) | s, a] / (1 - γ_L)
-        + (Follower influence term) / (β_F(1-γ_F))
-
-        Args:
-            replay_buffer: Replay buffer containing transitions
-            batch_size: Batch size for gradient estimation
-            use_second_term: If False, only compute first term (standard policy gradient)
-
-        Returns:
-            Dictionary with gradient information and policy gradients
-
-        """
+        """Estimate leader's policy gradient with FULL variance reduction (Baselines)."""
         if (
             self.leader_q_table is None
             or not self.leader_policy_obj.use_tabular
@@ -1497,12 +1476,12 @@ class BilevelRL:
         ):
             return {"gradient_norm": 0.0, "estimated_gradient": None, "policy_gradients": None}
 
-        # Sample batch with subsequences for computing conditional expectation
+        # Sample batch with subsequences
         samples = replay_buffer.sample_transitions(
             batch_size=batch_size,
             replace=True,
             discount=False,
-            with_subsequence=True,  # Need subsequences for Equation 5.20
+            with_subsequence=True,
         )
 
         obs = samples["observation"]
@@ -1510,100 +1489,104 @@ class BilevelRL:
         follower_acts = samples["action"]
         subsequences = samples["subsequence"]
 
-        # Convert to numpy arrays if needed
-        if isinstance(obs, torch.Tensor):
-            obs = obs.cpu().numpy()
-        if isinstance(leader_acts, torch.Tensor):
-            leader_acts = leader_acts.cpu().numpy()
-        if isinstance(follower_acts, torch.Tensor):
-            follower_acts = follower_acts.cpu().numpy()
+        # Convert/Flatten arrays
+        if isinstance(obs, torch.Tensor): obs = obs.cpu().numpy()
+        if isinstance(leader_acts, torch.Tensor): leader_acts = leader_acts.cpu().numpy()
+        if isinstance(follower_acts, torch.Tensor): follower_acts = follower_acts.cpu().numpy()
 
-        # Flatten arrays
         obs = obs.flatten().astype(int)
         leader_acts = leader_acts.flatten().astype(int)
         follower_acts = follower_acts.flatten().astype(int)
 
-        # Get Q-values from Q-table: Q_L(s, a, b)
-        q_values = np.array([self.leader_q_table[obs[i], leader_acts[i], follower_acts[i]] for i in range(len(obs))])
-
-        # First term: Standard policy gradient
-        # ∇_{θ_L} log f_{θ_L}(a|s) Q_L(s, a, b)
-        # For tabular policy: ∇_{π_L[s, a]} log π_L(a|s) = 1/π_L(a|s) if action matches, else 0
+        # Initialize gradients
         first_term_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
-
-        # Second term: Follower influence term
-        # [1/(β_F(1-γ_F))] * (Q_L(s,a,b) - E_{b~g}[Q_L(s,a,b)])
-        # * E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ,ȧ) | s,a,b ]
         second_term_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
 
-        # Get β_F (temperature parameter from Soft Q-Learning)
-        beta_F = 5.0 * 1e-2  # Default temperature
-        # if self.soft_q_learning is not None:
-        #     beta_F = self.soft_q_learning.temperature
+        # 定数
+        # もし soft_q_learning から取れるなら self.soft_q_learning.temperature 推奨
+        beta_F = 5.0 * 1e-2
+        num_leader_actions = self.leader_q_table.shape[1]
 
-        # Accumulate gradients per (state, action) pair
+        # 統計用リスト
+        all_q_values = []
+
+        # === Batch Loop (Correct Logic) ===
         for i in range(len(obs)):
             state = obs[i]
             action = leader_acts[i]
-            q_val = q_values[i]
+            follower_act = follower_acts[i]
 
-            # First term: Standard policy gradient
-            # For tabular policy, gradient w.r.t. π_L[s, a] is Q-value
-            first_term_gradients[state, action] += q_val
+            # Q_L(s, a, b)
+            q_val = self.leader_q_table[state, action, follower_act]
+            all_q_values.append(q_val)
 
-            # Second term: Follower influence term (only if use_second_term=True)
+            # -------------------------------------------------------------------
+            # [Term 1 Baseline] V_L(s) = E_{a', b'}[ Q_L(s, a', b') ]
+            # -------------------------------------------------------------------
+            v_baseline_L = 0.0
+            leader_probs_s = self.leader_policy_obj.policy_table[state]
+
+            for a_prime in range(num_leader_actions):
+                # フォロワーの反応確率 g(b|s, a')
+                f_probs = self._get_follower_action_probs(state, a_prime)
+                # E_b[Q(s, a', b)]
+                q_s_a_expected = np.dot(f_probs, self.leader_q_table[state, a_prime])
+                v_baseline_L += leader_probs_s[a_prime] * q_s_a_expected
+
+            # Update Term 1: ∇ log π(a|s) * (Q_L - V_L)
+            first_term_gradients[state, action] += (q_val - v_baseline_L)
+
+            # -------------------------------------------------------------------
+            # [Term 2] Influence Term
+            # -------------------------------------------------------------------
             if use_second_term:
-                # Compute E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
-                follower_probs = self._get_follower_action_probs(state, action)
-                num_follower_actions = len(follower_probs)
-                expected_q_follower = 0.0
-                for b in range(num_follower_actions):
-                    expected_q_follower += follower_probs[b] * self.leader_q_table[state, action, b]
-
-                # Benefit: Q_L(s, a, b) - E_{b \sim g_{θ_L}^*(\cdot|s,a)}[Q_L(s, a, b)]
+                # 1. Benefit: Q_L(s,a,b) - E_b'[Q_L(s,a,b')]
+                f_probs_here = self._get_follower_action_probs(state, action)
+                expected_q_follower = np.dot(f_probs_here, self.leader_q_table[state, action])
                 benefit = q_val - expected_q_follower
 
-                # Influence: E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F(ṡ, ȧ) | s, a, b ]
-                # This is computed using the subsequence starting from (s, a, b)
+                # 2. Influence Gradient with Baseline
                 influence_gradients = np.zeros_like(self.leader_policy_obj.policy_table)
 
                 if self.soft_q_learning is not None and subsequences is not None:
-                    # Get subsequence for this sample
                     subseq_obs = subsequences["observation"][i]
                     subseq_leader_acts = subsequences["leader_action"][i]
 
-                    # Convert to numpy arrays if needed
-                    if isinstance(subseq_obs, torch.Tensor):
-                        subseq_obs = subseq_obs.cpu().numpy()
-                    if isinstance(subseq_leader_acts, torch.Tensor):
-                        subseq_leader_acts = subseq_leader_acts.cpu().numpy()
+                    if isinstance(subseq_obs, torch.Tensor): subseq_obs = subseq_obs.cpu().numpy()
+                    if isinstance(subseq_leader_acts, torch.Tensor): subseq_leader_acts = subseq_leader_acts.cpu().numpy()
 
                     subseq_obs = subseq_obs.flatten().astype(int)
                     subseq_leader_acts = subseq_leader_acts.flatten().astype(int)
 
-                    # Compute conditional expectation over subsequence
-                    # E_{d_{γ_F}} [ ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) V_F^soft(ṡ, ȧ) | s, a, b ]
-                    for t, (s_dot, a_dot) in enumerate(zip(subseq_obs, subseq_leader_acts, strict=True)):
-                        # Compute V_F^soft(ṡ, ȧ)
-                        v_f_soft = self.soft_q_learning.compute_soft_value(s_dot, a_dot)
+                    # Subsequence Loop
+                    for t, (s_dot, a_dot) in enumerate(zip(subseq_obs, subseq_leader_acts)):
+                        # V_F(s_dot, a_dot)
+                        v_f_soft_sa = self.soft_q_learning.compute_soft_value(s_dot, a_dot)
 
-                        # For tabular policy: ∇_{θ_L} log f_{θ_L}(ȧ|ṡ) is 1/π_L(ȧ|ṡ)
-                        # So gradient w.r.t. π_L[ṡ, ȧ] is: V_F^soft(ṡ, ȧ) / π_L(ȧ|ṡ)
-                        # We accumulate V_F^soft(ṡ, ȧ) and normalize later
+                        # [Term 2 Baseline] V_F(s_dot) = E_{a'}[ V_F(s_dot, a') ]
+                        leader_probs_dot = self.leader_policy_obj.policy_table[s_dot]
 
-                        # Discount by γ_F^t
-                        discount_factor = self.discount_follower**t
-                        influence_gradients[s_dot, a_dot] += discount_factor * v_f_soft
+                        v_f_baseline_dot = 0.0
+                        for a_prime_dot in range(num_leader_actions):
+                             val = self.soft_q_learning.compute_soft_value(s_dot, a_prime_dot)
+                             v_f_baseline_dot += leader_probs_dot[a_prime_dot] * val
 
-                    # Normalize by (1 - γ_F) for discounted state distribution expectation
-                    # This is part of the d_{γ_F} normalization
+                        # Advantage of Leader's action on Follower's value
+                        # A_F_influence = V_F(s', a') - V_F(s')
+                        adv_f_influence = v_f_soft_sa - v_f_baseline_dot
+
+                        # Discount and Accumulate
+                        discount_factor = self.discount_follower ** t
+                        influence_gradients[s_dot, a_dot] += discount_factor * adv_f_influence
+
+                    # Normalize influence by (1-γ_F)
                     if len(subseq_obs) > 0:
                         influence_gradients = influence_gradients / (1.0 - self.discount_follower)
 
-                # Second term contribution
-                # benefit * influence_gradients / β_F
-                # Note: We already divided by (1-γ_F) in influence_gradients computation
+                # Combine: Benefit * Influence / beta
                 second_term_gradients += benefit * influence_gradients / beta_F
+
+        # --- [修正] ここにあった重複ループを削除しました ---
 
         # Normalize by number of samples per (state, action)
         state_action_counts = np.zeros_like(self.leader_policy_obj.policy_table)
@@ -1620,10 +1603,10 @@ class BilevelRL:
         # Normalize each term by (1 - γ_L) separately for analysis
         first_term_normalized = first_term_gradients / (1.0 - self.discount_leader)
         second_term_normalized = (
-            second_term_gradients / (1.0 - self.discount_leader) if use_second_term else np.zeros_like(first_term_normalized)
+            second_term_gradients / (1.0 - self.discount_leader) if use_second_term else np.zeros_like(first_term_gradients)
         )
 
-        # Combine terms (only first term if use_second_term=False)
+        # Combine terms
         policy_gradients = first_term_normalized + (second_term_normalized if use_second_term else 0)
 
         # Compute norms for each term
@@ -1631,20 +1614,21 @@ class BilevelRL:
         second_term_norm = np.linalg.norm(second_term_normalized) if use_second_term else 0.0
         gradient_norm = np.linalg.norm(policy_gradients)
 
-        # Compute advantages for statistics
-        advantages = q_values.copy()
+        # Compute advantages for statistics (just for logging)
+        all_q_values = np.array(all_q_values)
+        advantages = np.zeros_like(all_q_values)
         for i in range(len(obs)):
             state = obs[i]
             follower_probs = self._get_follower_action_probs(state, leader_acts[i])
             baseline = np.sum(follower_probs * self.leader_q_table[state, leader_acts[i], :])
-            advantages[i] = q_values[i] - baseline
+            advantages[i] = all_q_values[i] - baseline
 
         return {
             "gradient_norm": gradient_norm,
             "first_term_norm": first_term_norm,
             "second_term_norm": second_term_norm,
             "estimated_gradient": np.mean(advantages),
-            "mean_q_value": np.mean(q_values),
+            "mean_q_value": np.mean(all_q_values),
             "mean_advantage": np.mean(advantages),
             "policy_gradients": policy_gradients,
         }
