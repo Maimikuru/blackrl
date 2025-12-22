@@ -978,15 +978,13 @@ class BilevelRL:
         if verbose:
             print("\nUpdating follower policy with estimated reward...")
 
-        # SFからQ値を計算
         Q_learned = {}
         for s in range(self.env_spec.observation_space.n):
-            Q_learned[(s,)] = {}
             for la in range(self.env_spec.leader_action_space.n):
-                Q_learned[(s,)][(la,)] = {}
                 for fa in range(self.env_spec.action_space.n):
                     q_val = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
-                    Q_learned[(s,)][(la,)][(fa,)] = q_val
+                    # タプル (s, a, b) を直接キーにする
+                    Q_learned[(s, la, fa)] = q_val
 
         # FollowerPolicyModelにセット
         temperature = self.soft_q_config.get("temperature", 1.0)
