@@ -12,7 +12,6 @@ where:
 """
 
 import importlib
-import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -225,6 +224,7 @@ class BilevelRL:
         self.feature_fn = feature_fn
         self.discount_leader = discount_leader
         self.discount_follower = discount_follower
+        self.sf_learning_model = None
 
         # Set separate learning rates, falling back to learning_rate_leader if not specified
         self.learning_rate_leader_actor = (
@@ -761,14 +761,9 @@ class BilevelRL:
         env,
         verbose: bool = True,
     ) -> torch.Tensor:
-        """Estimate follower's reward parameters using MDCE IRL with Successor Features (SF)."""
-        # SF学習クラスのインポート
-
-        # 1. Expert FEV の計算 (初回のみモンテカルロで計算して固定)
+        """Estimate follower's reward parameters using Hybrid (SoftQ + SF) MDCE IRL with Parallel Data Collection."""
+        # 1. Expert FEV 計算
         expert_fev = self.mdce_irl.compute_expert_fev(trajectories)
-
-        if verbose:
-            print(f"Expert FEV: {expert_fev}")
 
         # Initialize w
         if self.mdce_irl.w is None:
@@ -777,224 +772,229 @@ class BilevelRL:
         else:
             feature_dim = self.mdce_irl.w.shape[0]
 
-        # ★ SF学習器の初期化
-        sf_learning = SuccessorFeatureLearning(
-            env_spec=self.env_spec,
-            feature_dim=feature_dim,
-            feature_fn=self.mdce_irl.feature_fn,
-            discount=self.discount_follower,
-            learning_rate=0.1,
-            temperature=self.soft_q_config.get("temperature", 1.0),
-        )
+        # Config
+        temperature = self.soft_q_config.get("temperature", 1.0)
+        sf_lr = 0.05
+        q_lr = self.learning_rate_follower
+
+        # ヘルパー関数定義 (変更なし)
+        def get_leader_probs(state):
+            if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
+                s_int = int(state.item() if hasattr(state, "item") else state)
+                return self.leader_policy_obj.policy_table[s_int].tolist()
+            num_actions = self.env_spec.leader_action_space.n
+            return [1.0 / num_actions] * num_actions
+
+        def dynamic_reward_fn(s, la, fa):
+            phi = self.mdce_irl.feature_fn(s, la, fa)
+            if isinstance(phi, np.ndarray):
+                phi = torch.from_numpy(phi).float()
+            return torch.dot(self.mdce_irl.w, phi).item()
+
+        # === [Learner 1] Policy Learner (Soft Q-Learning) - Warm Start ===
+        if self.soft_q_learning is None or not isinstance(self.soft_q_learning, SoftQLearning):
+            self.soft_q_learning = SoftQLearning(
+                env_spec=self.env_spec,
+                reward_fn=dynamic_reward_fn,
+                leader_policy=get_leader_probs,
+                discount=self.discount_follower,
+                learning_rate=q_lr,
+                temperature=temperature,
+            )
+        else:
+            self.soft_q_learning.reward_fn = dynamic_reward_fn
+            self.soft_q_learning.leader_policy = get_leader_probs
+            self.soft_q_learning.learning_rate = q_lr
+
+        soft_q_learner = self.soft_q_learning
+
+        # === [Learner 2] Evaluation Learner (Successor Features) - Warm Start ===
+        if self.sf_learning_model is None:
+            self.sf_learning_model = SuccessorFeatureLearning(
+                env_spec=self.env_spec,
+                feature_dim=feature_dim,
+                feature_fn=self.mdce_irl.feature_fn,
+                discount=self.discount_follower,
+                learning_rate=sf_lr,
+                temperature=temperature,
+            )
+
+        sf_learner = self.sf_learning_model
+
+        # 環境情報の準備（並列処理用）
+        env_class = type(env)
+        env_class_name = env_class.__name__
+        env_module_path = env_class.__module__
+        env_init_kwargs = getattr(env, "_init_kwargs", {})
+
+        if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
+            leader_policy_table = self.leader_policy_obj.policy_table.copy()
+        else:
+            n_s = self.env_spec.observation_space.n
+            n_la = self.env_spec.leader_action_space.n
+            leader_policy_table = np.ones((n_s, n_la)) / n_la
+
+        n_fa = self.env_spec.action_space.n
 
         # === IRL Loop ===
         for irl_iteration in range(self.mdce_irl.max_iterations):
-            # リーダー方策の確率分布取得関数
-            def leader_policy_probs(state):
-                if self.leader_policy_obj.use_tabular and self.leader_policy_obj.policy_table is not None:
-                    s_int = int(state.item() if hasattr(state, "item") else state)
-                    return self.leader_policy_obj.policy_table[s_int].tolist()
-                # Fallback for non-tabular
-                num_actions = self.env_spec.leader_action_space.n
-                return [1.0 / num_actions] * num_actions
+            # --- 1. Parallel Data Collection (On-Policy) ---
+            # 現在の Soft Q-values を取得してワーカーに渡す
+            current_follower_q = {}
+            if hasattr(soft_q_learner, "Q"):
+                for sk, ld in soft_q_learner.Q.items():
+                    current_follower_q[sk] = {}
+                    for lk, fd in ld.items():
+                        current_follower_q[sk][lk] = dict(fd)
 
-            # --- SF Learning Loop (SoftQの代わり) ---
-            # 報酬 w を使って Q = w^T ψ を計算しながら行動し、ψ を更新する
+            n_episodes_irl = 50
+            max_workers = min(n_episodes_irl, 8)
 
-            soft_q_start_time = time.time()
+            collected_transitions = []
 
-            for _ in range(self.mdce_irl.n_soft_q_iterations):
-                obs, _ = env.reset()
-                while True:
-                    leader_act = self.leader_policy_obj.sample_action(obs)
-
-                    # SFと現在のwを使って行動選択 (Q学習の代わり)
-                    follower_act = sf_learning.sample_action(obs, leader_act, self.mdce_irl.w)
-
-                    env_step = env.step(leader_act, follower_act)
-
-                    # SFの更新
-                    sf_learning.update(
-                        obs,
-                        leader_act,
-                        follower_act,
-                        env_step.observation,
-                        env_step.last,
-                        leader_policy_probs,
-                        self.mdce_irl.w,
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        _collect_single_episode,
+                        env_class_name,
+                        env_module_path,
+                        env_init_kwargs,
+                        leader_policy_table,
+                        current_follower_q,
+                        {},
+                        n_fa,
+                        temperature,
                     )
+                    for _ in range(n_episodes_irl)
+                ]
 
-                    obs = env_step.observation
-                    if env_step.last:
-                        break
+                for future in as_completed(futures):
+                    data = future.result()
+                    steps = len(data["observation"])
+                    for i in range(steps):
+                        transition = {
+                            "obs": data["observation"][i],
+                            "leader_act": data["leader_action"][i],
+                            "follower_act": data["action"][i],
+                            "next_obs": data["next_observation"][i],
+                            "done": data["last"][i],
+                        }
+                        collected_transitions.append(transition)
 
-            soft_q_time = time.time() - soft_q_start_time
+            # --- 2. Update Learners with Collected Data ---
+            for t in collected_transitions:
+                obs, la, fa = t["obs"], t["leader_act"], t["follower_act"]
+                next_obs, done = t["next_obs"], t["done"]
 
-            # --- Policy FEV の計算 (SFから一発計算) ---
-            fev_start_time = time.time()
+                # 報酬計算
+                phi = self.mdce_irl.feature_fn(obs, la, fa)
+                phi_tensor = torch.from_numpy(phi).float()
+                current_reward = torch.dot(self.mdce_irl.w, phi_tensor).item()
 
-            # 初期分布 (State 0 確定)
-            initial_dist = np.zeros(self.env_spec.observation_space.n)
-            initial_dist[0] = 1.0
+                # A. Soft Q Update
+                soft_q_learner.update(obs, la, fa, current_reward, next_obs, done)
 
-            policy_fev_np = sf_learning.get_initial_fev(initial_dist, leader_policy_probs, self.mdce_irl.w)
+                # B. SF Update
+                if not done:
+                    leader_probs_next = get_leader_probs(next_obs)
+                    expected_next_sf = torch.zeros(feature_dim)
+                    for la_next, la_prob in enumerate(leader_probs_next):
+                        if la_prob <= 1e-8:
+                            continue
+                        q_vals = [soft_q_learner.get_q_value(next_obs, la_next, b) for b in range(n_fa)]
+                        fa_probs = torch.softmax(torch.tensor(q_vals) / temperature, dim=0).numpy()
+                        for fa_next, fa_prob in enumerate(fa_probs):
+                            if fa_prob <= 1e-8:
+                                continue
+                            psi_next = sf_learner.sf_table[int(next_obs), la_next, fa_next]
+                            expected_next_sf += la_prob * fa_prob * torch.from_numpy(psi_next).float()
+                    target_sf = phi_tensor + self.discount_follower * expected_next_sf
+                else:
+                    target_sf = phi_tensor
 
-            # ★重要: スケール合わせ (SFは総和なので、平均のExpertに合わせるため (1-γ) を掛ける)
-            scale_factor = 1.0 - self.discount_follower
-            policy_fev = torch.from_numpy(policy_fev_np).float() * scale_factor
+                current_sf = sf_learner.sf_table[int(obs), int(la), int(fa)]
+                sf_learner.sf_table[int(obs), int(la), int(fa)] += sf_lr * (target_sf.numpy() - current_sf)
 
-            fev_time = time.time() - fev_start_time
+            # --- 3. Update Reward Parameters w ---
+            # Policy FEV
+            policy_fev = torch.zeros(feature_dim)
+            s0 = 0
+            leader_probs_0 = get_leader_probs(s0)
+            for la_0, la_prob in enumerate(leader_probs_0):
+                q_vals = [soft_q_learner.get_q_value(s0, la_0, b) for b in range(n_fa)]
+                fa_probs = torch.softmax(torch.tensor(q_vals) / temperature, dim=0).numpy()
+                for fa_0, fa_prob in enumerate(fa_probs):
+                    psi_0 = sf_learner.sf_table[s0, la_0, fa_0]
+                    policy_fev += la_prob * fa_prob * torch.from_numpy(psi_0).float()
 
-            # --- 報酬 w の更新 ---
+            policy_fev *= 1.0 - self.discount_follower
+
+            # 勾配計算と更新
             gradient = expert_fev - policy_fev
-
-            # 絶対誤差で収束判定
-            delta_fem = torch.max(torch.abs(gradient)).item()
-            gradient_norm = torch.norm(gradient).item()
-
-            # Q値統計の計算 (SFから復元) - 毎回記録
-            q_vals = []
-            for s in range(self.env_spec.observation_space.n):
-                for la in range(self.env_spec.leader_action_space.n):
-                    for fa in range(self.env_spec.action_space.n):
-                        q = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
-                        q_vals.append(q)
-            q_vals = np.array(q_vals)
-
-            # stats に記録
-            self.stats["irl_delta_fem"].append(delta_fem)
-            self.stats["irl_gradient_norm"].append(gradient_norm)
-            self.stats["irl_q_value_mean"].append(float(np.mean(q_vals)))
-            self.stats["irl_q_value_min"].append(float(np.min(q_vals)))
-            self.stats["irl_q_value_max"].append(float(np.max(q_vals)))
-            self.stats["irl_q_value_std"].append(float(np.std(q_vals)))
-
             lr = 0.1 / (1.0 + 0.01 * irl_iteration)
             self.mdce_irl.w = self.mdce_irl.w + lr * gradient
 
-            # --- ログ表示の復元 ---
+            # --- [復活] ログ記録と表示 ---
+            delta_fem = torch.max(torch.abs(gradient)).item()
+            gradient_norm = torch.norm(gradient).item()
+
+            # Q値の統計を計算 (全状態・行動を走査)
+            # ※ 並列収集版ではメインループ内でQ値が更新されていないため、
+            #    学習後の soft_q_learner から現在の値を集計する
+            all_q_values = []
+            num_states = self.env_spec.observation_space.n
+            num_leader_actions = self.env_spec.leader_action_space.n
+            num_follower_actions = self.env_spec.action_space.n
+
+            for s in range(num_states):
+                for la in range(num_leader_actions):
+                    for fa in range(num_follower_actions):
+                        q = soft_q_learner.get_q_value(s, la, fa)
+                        all_q_values.append(q)
+
+            all_q_values = np.array(all_q_values)
+
+            # Statsへの追加
+            self.stats["irl_delta_fem"].append(delta_fem)
+            self.stats["irl_gradient_norm"].append(gradient_norm)
+            self.stats["irl_q_value_mean"].append(float(np.mean(all_q_values)))
+            self.stats["irl_q_value_min"].append(float(np.min(all_q_values)))
+            self.stats["irl_q_value_max"].append(float(np.max(all_q_values)))
+            self.stats["irl_q_value_std"].append(float(np.std(all_q_values)))
+
             if verbose and (irl_iteration % 10 == 0):
-                print(f"\n--- IRL iteration {irl_iteration}: Soft Q-Learning (via SF) Statistics ---")
-                print(f"  Min:  {np.min(q_vals):8.4f}")
-                print(f"  Max:  {np.max(q_vals):8.4f}")
-                print(f"  Mean: {np.mean(q_vals):8.4f}")
-                print(f"  Std:  {np.std(q_vals):8.4f}")
+                print(f"\n--- IRL iteration {irl_iteration}: Hybrid (SoftQ+SF) Statistics ---")
+                print(f"  Min:  {np.min(all_q_values):8.4f}")
+                print(f"  Max:  {np.max(all_q_values):8.4f}")
+                print(f"  Mean: {np.mean(all_q_values):8.4f}")
+                print(f"  Std:  {np.std(all_q_values):8.4f}")
                 print()
 
-                # 2. 推定報酬関数の表示
-                def reward_fn(state, leader_action, follower_action):
-                    """Compute reward r_F(s, a, b) = w^T φ(s, a, b)."""
-                    phi = self.mdce_irl.feature_fn(state, leader_action, follower_action)
-                    if isinstance(phi, np.ndarray):
-                        phi = torch.from_numpy(phi).float()
-                    elif not isinstance(phi, torch.Tensor):
-                        phi = torch.tensor(phi, dtype=torch.float32)
-                    return torch.dot(self.mdce_irl.w, phi).item()
+                # 推定報酬関数の表示
+                print(f"--- IRL iteration {irl_iteration}: Estimated Reward Function r_F(s, a, b) = w^T φ ---")
+                self._display_learned_rewards(dynamic_reward_fn)  # dynamic_reward_fnを渡して表示
 
-                print(f"\n--- IRL iteration {irl_iteration}: Estimated Reward Function r_F(s, a, b) = w^T φ ---")
-                self._display_learned_rewards(reward_fn)
-
-                # 3. 報酬パラメータwの表示
+                # 報酬パラメータwの表示
                 w_np = self.mdce_irl.w.detach().cpu().numpy()
                 w_norm = torch.norm(self.mdce_irl.w).item()
                 print(f"\n--- IRL iteration {irl_iteration}: Reward Parameters w (||w||={w_norm:.4f}) ---")
                 print(f"  w = {w_np}")
-                # 特徴量がone-hotの場合の解釈
-                if len(w_np) == 18:  # 3 states × 2 leader actions × 3 follower actions
-                    print("  Interpretation (one-hot features):")
-                    idx = 0
-                    for s in range(3):
-                        for a in range(2):
-                            for b in range(3):
-                                print(f"    w[{idx:2d}] (s={s}, a={a}, b={b}): {w_np[idx]:8.4f}")
-                                idx += 1
-                print()
 
-                # 4. その他の情報
-                gradient_norm = torch.norm(gradient).item()
+                print(f"IRL iteration {irl_iteration}: δ_FEM={delta_fem:.6f}, ||gradient||={gradient_norm:.6f}")
 
-                # 尤度計算用の policy_fn ラッパー
-                def policy_fn_wrapper(s, la, fa):
-                    q = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
-                    # Note: 正確なlog_probを出すにはSoftmaxの分母計算が必要だが、簡易表示ならこれでも可
-                    # 必要なら sf_learning に log_prob 計算メソッドを追加して呼ぶ
-                    return q
-
-                # 尤度計算 (少し重いのでスキップしても良いが、元通りなら入れる)
-                # likelihood = self.mdce_irl.compute_likelihood(trajectories, policy_fn_wrapper)
-                likelihood = 0.0  # 仮置き
-
-                print(
-                    f"IRL iteration {irl_iteration}: δ_FEM={delta_fem:.6f}, ||gradient||={gradient_norm:.6f}, likelihood={likelihood:.6f}",
-                )
-                print(f"  Timing: SoftQ+SF={soft_q_time:.2f}s, FEV Calc={fev_time:.4f}s")
-
+            # 収束判定
             if delta_fem < self.mdce_irl.tolerance:
                 if verbose:
                     print(f"Converged at iter {irl_iteration}")
-                    print("\n" + "=" * 80)
+                    # 最終的な報酬関数を表示
+                    print("=" * 80)
                     print("MDCE IRL CONVERGED - FINAL STATISTICS")
                     print("=" * 80)
-
-                    # 最終的な推定報酬関数の表示
-                    def final_reward_fn(state, leader_action, follower_action):
-                        """Compute final reward r_F(s, a, b) = w^T φ(s, a, b)."""
-                        phi = self.mdce_irl.feature_fn(state, leader_action, follower_action)
-                        if isinstance(phi, np.ndarray):
-                            phi = torch.from_numpy(phi).float()
-                        elif not isinstance(phi, torch.Tensor):
-                            phi = torch.tensor(phi, dtype=torch.float32)
-                        return torch.dot(self.mdce_irl.w, phi).item()
-
-                    print("\n" + "=" * 80)
-                    print("FINAL ESTIMATED REWARD FUNCTION: r_F(s, a, b) = w^T φ")
-                    print("=" * 80)
-                    self._display_learned_rewards(final_reward_fn)
-
-                    # 最終的な報酬パラメータwの表示
-                    w_np = self.mdce_irl.w.detach().cpu().numpy()
-                    w_norm = torch.norm(self.mdce_irl.w).item()
-                    print("\n" + "=" * 80)
-                    print(f"FINAL REWARD PARAMETERS w (||w||={w_norm:.6f})")
-                    print("=" * 80)
-                    print(f"w = {w_np}")
-                    # 特徴量がone-hotの場合の解釈
-                    if len(w_np) == 18:  # 3 states × 2 leader actions × 3 follower actions
-                        print("\nInterpretation (one-hot features):")
-                        idx = 0
-                        for s in range(3):
-                            for a in range(2):
-                                for b in range(3):
-                                    print(f"  w[{idx:2d}] (s={s}, a={a}, b={b}): {w_np[idx]:10.6f}")
-                                    idx += 1
-                    print("=" * 80)
-
-                    # 最終的なQ値を計算してモデルにセットしておく（後の評価用）
-                    # self.soft_q_learning に SFベースのQ値をセットする等の処理が必要ならここで行う
+                    self._display_learned_rewards(dynamic_reward_fn)
                 break
 
-        # ★追加: IRLの結果をフォロワーモデルに反映
-        # SFからQ値を計算してFollowerPolicyModelにセット
         if verbose:
-            print("\nUpdating follower policy with estimated reward...")
-
-        Q_learned = {}
-        for s in range(self.env_spec.observation_space.n):
-            for la in range(self.env_spec.leader_action_space.n):
-                for fa in range(self.env_spec.action_space.n):
-                    q_val = sf_learning.get_q_value(s, la, fa, self.mdce_irl.w)
-                    # タプル (s, a, b) を直接キーにする
-                    Q_learned[(s, la, fa)] = q_val
-
-        # FollowerPolicyModelにセット
-        temperature = self.soft_q_config.get("temperature", 1.0)
-        if self.soft_q_learning is None or not isinstance(self.soft_q_learning, FollowerPolicyModel):
-            self.soft_q_learning = FollowerPolicyModel(self.env_spec, temperature)
-        self.soft_q_learning.set_q_values(Q_learned)
-
-        if verbose:
-            print("Follower policy updated with IRL-estimated reward.")
-
+            print("Follower policy updated (Hybrid SoftQ+SF).")
         return self.mdce_irl.w
 
     def _generate_expert_trajectories(self, env, n_trajectories: int = 50, verbose: bool = False):

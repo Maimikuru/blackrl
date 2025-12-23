@@ -106,3 +106,25 @@ class SuccessorFeatureLearning:
                 fev += p_s0 * p_l * exp_sf
 
         return fev
+
+    # blackrl/agents/follower/sf_learning.py に追加推奨
+
+    def get_psi(self, state, leader_action, follower_action):
+        """Get the successor feature vector."""
+        state = int(state) if not isinstance(state, int) else state
+        # self.psi が torch.Tensor か numpy.ndarray か辞書かによる
+        # テーブルの場合:
+        return self.psi[state, leader_action, follower_action]
+
+    def update_psi_direct(self, state, leader_action, follower_action, target_psi):
+        """Update PSI using a pre-calculated target."""
+        # TD update: psi <- psi + alpha * (target - psi)
+        current = self.get_psi(state, leader_action, follower_action)
+        if isinstance(target_psi, torch.Tensor):
+            target_psi = target_psi.detach().numpy()  # 必要なら変換
+
+        new_val = current + self.learning_rate * (target_psi - current)
+
+        # 保存
+        state = int(state)
+        self.psi[state, leader_action, follower_action] = new_val
