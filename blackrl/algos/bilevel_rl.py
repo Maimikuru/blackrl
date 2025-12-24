@@ -1,9 +1,4 @@
-"""Bi-level Reinforcement Learning Algorithm.
-- J_L: Leader's objective (discounted cumulative reward)
-- J_F: Follower's objective (Max-Ent RL with entropy regularization)
-- f_{θ_L}: Leader's policy parameterized by θ_L
-- g^*: Follower's optimal response policy
-"""
+"""Bi-level Reinforcement Learning Algorithm."""
 
 import importlib
 from collections import defaultdict
@@ -130,7 +125,6 @@ def _collect_single_episode(
             obs,
             leader_policy_table,
             follower_q_values,
-            env_spec_dict,
             num_follower_actions,
             temperature,
         )
@@ -1511,11 +1505,6 @@ class BilevelRL:
 
                         # log f の勾配は 1/f なので、V_F / f を加算する必要がある
                         influence_gradients[s_dot, a_dot] += discount_factor * (v_f_soft / current_prob)
-
-                    # Normalize by (1 - γ_F) for discounted state distribution expectation
-                    # This is part of the d_{γ_F} normalization
-                    if len(subseq_obs) > 0:
-                        influence_gradients = influence_gradients / (1.0 - self.discount_follower)
 
                 # Second term contribution
                 # benefit * influence_gradients / β_F

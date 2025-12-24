@@ -20,7 +20,6 @@ class MDCEIRL:
         self.max_iterations = max_iterations
         self.tolerance = tolerance
         self.n_soft_q_iterations = n_soft_q_iterations
-        # Reward parameter (to be learned)
         self.w: torch.Tensor | None = None
 
     def compute_expert_fev(
