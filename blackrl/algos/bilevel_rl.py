@@ -1149,21 +1149,9 @@ class BilevelRL:
                 print(f"Soft Q-Learning iteration {iteration}: reward={total_reward:.4f}")
 
         # Create follower policy from learned Q-function
-        # If deterministic, choose action with maximum Q-value
-        # Otherwise, sample from Max-Ent policy
+        # Always sample from Max-Ent policy (deterministic=False is not used for Max-Ent RL)
         def follower_policy_fn(obs, leader_act, deterministic=False):
-            if deterministic:
-                # Choose action with maximum Q-value
-                num_follower_actions = self.env_spec.action_space.n
-                best_action = 0
-                best_q = float("-inf")
-                for b in range(num_follower_actions):
-                    q_val = self.soft_q_learning.get_q_value(obs, leader_act, b)
-                    if q_val > best_q:
-                        best_q = q_val
-                        best_action = b
-                return np.array(best_action, dtype=np.int32)
-            # Sample from Max-Ent policy
+            # Max-Ent RL always uses stochastic policy
             return self.soft_q_learning.sample_action(obs, leader_act)
 
         self.follower_policy = follower_policy_fn
@@ -1655,17 +1643,8 @@ class BilevelRL:
                 self.soft_q_learning = self.true_follower_model
 
                 # 方策関数を作成
+                # Max-Ent RL always uses stochastic policy
                 def follower_policy_fn(obs, leader_act, deterministic=False):
-                    if deterministic:
-                        # (省略: 決定論的選択ロジック)
-                        num_follower_actions = self.env_spec.action_space.n
-                        best_action = 0
-                        best_q = float("-inf")
-                        for b in range(num_follower_actions):
-                            q_val = self.soft_q_learning.get_q_value(obs, leader_act, b)
-                            if q_val > best_q:
-                                best_q, best_action = q_val, b
-                        return np.array(best_action, dtype=np.int32)
                     return self.soft_q_learning.sample_action(obs, leader_act)
 
                 self.follower_policy = follower_policy_fn
