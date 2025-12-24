@@ -293,32 +293,14 @@ class BilevelRL:
                 print(f"  Action a={a}: E[Q]={expected_q:.4f} | Details: [{q_str}]")
         print("-" * 60)
 
-    def _initialize_leader_q_table(self, env):
-        """Initialize leader's Q-table Q_L[s, a, b].
-
-        Args:
-            env: Environment instance
-
-        """
+    def _initialize_leader_q_table(self):
+        """Initialize leader's Q-table Q_L[s, a, b]."""
         obs_space = self.env_spec.observation_space
         leader_action_space = self.env_spec.leader_action_space
         follower_action_space = self.env_spec.action_space
 
         # Get dimensions
-        if hasattr(obs_space, "n"):
-            num_states = obs_space.n
-        else:
-            num_states = 1000  # Fallback
-
-        if hasattr(leader_action_space, "n"):
-            num_leader_actions = leader_action_space.n
-        else:
-            num_leader_actions = 10  # Fallback
-
-        if hasattr(follower_action_space, "n"):
-            num_follower_actions = follower_action_space.n
-        else:
-            num_follower_actions = 10  # Fallback
+        num_states, num_leader_actions, num_follower_actions = obs_space.n, leader_action_space.n, follower_action_space.n
 
         # Initialize Q-table: Q_L[state, leader_action, follower_action]
         self.leader_q_table = np.zeros(
@@ -328,7 +310,6 @@ class BilevelRL:
 
         # Initialize tabular policy in LeaderPolicy
         self.leader_policy_obj._initialize_tabular_policy()
-
         self.leader_policy_table = self.leader_policy_obj.policy_table
         self._use_tabular_policy = True
 
@@ -971,16 +952,8 @@ class BilevelRL:
             ]
 
             for future in as_completed(futures):
-                # _collect_single_episode の戻り値は辞書形式
-                # キー名を MDCE IRL が期待する形式 ("observations" 等) に合わせる必要がある場合
-                # 現在の mdce_irl.py は "observations" (複数形) を期待しているので、
-                # _collect_single_episode の戻り値 (keys: "observation", "leader_action"...) をそのまま使えるか確認が必要
-                # -> mdce_irl.py は "observations", "leader_actions" を期待しているが
-                #    _collect_single_episode は "observation", "leader_action" (単数形) を返す
-
                 raw_traj = future.result()
 
-                # キー名の変換 (単数形 -> 複数形)
                 formatted_traj = {
                     "observations": raw_traj["observation"],
                     "leader_actions": raw_traj["leader_action"],
@@ -1125,16 +1098,16 @@ class BilevelRL:
         env,
         follower_policy_fn: Callable,
         n_episodes: int = 10,
-        return_trajectories: bool = False,  # 追加引数
+        return_trajectories: bool = False,
     ) -> dict:
         """Evaluate leader's performance and optionally return trajectories."""
         original_policy = self.follower_policy
         self.follower_policy = follower_policy_fn
 
         total_returns = []
-        all_trajectories = []  # トラジェクトリー保存用
+        all_trajectories = []
 
-        for i in range(n_episodes):
+        for _ in range(n_episodes):
             obs, _ = env.reset()
             episode_return = 0.0
 
@@ -1152,6 +1125,29 @@ class BilevelRL:
 
                 env_step = env.step(leader_act, follower_act)
                 leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
+                # === デバッグ用ログ追加 ===
+                # フォロワーが確率的方策モデルを持っている場合、その確率分布を表示
+                if hasattr(self, "true_follower_model") and self.true_follower_model is not None:
+                    # 現在の状態・リーダー行動に対するフォロワーの確率を取得
+                    # ※ follower_policy_fn が true_f_pol_eval である前提
+
+                    # 観測値をnumpy等からキー変換等の処理が必要なら適宜行う
+                    debug_probs = self.true_follower_model.get_policy(obs, leader_act)
+
+                    # 確率が高い順にソートして表示
+                    probs_str = ", ".join([f"b{b}: {p:.4f}" for b, p in debug_probs.items()])
+
+                    # 現在のQ値も表示するとさらに分かりやすい
+                    q_vals_str = ", ".join(
+                        [
+                            f"Q(b{b})={self.true_follower_model.get_q_value(obs, leader_act, b):.2f}"
+                            for b in debug_probs.keys()
+                        ],
+                    )
+
+                    print(f"  [Debug] S={obs}, L_Act={leader_act} -> Probs=[{probs_str}], Qs=[{q_vals_str}]")
+                    print(f"          Selected F_Act={follower_act}")
+                # ==========================
 
                 # ログ保存
                 trajectory["observations"].append(int(obs))
@@ -1564,7 +1560,7 @@ class BilevelRL:
     ):
         """Train the bi-level RL algorithm."""
         # Initialize leader's Q-table
-        self._initialize_leader_q_table(env)
+        self._initialize_leader_q_table()
 
         # Initialize replay buffer
         replay_buffer = GammaReplayBuffer(size=replay_buffer_size, gamma=self.discount_leader)
@@ -1883,7 +1879,7 @@ class BilevelRL:
             def true_f_pol_eval(obs, leader_act):
                 return self.true_follower_model.sample_action(obs, leader_act)
 
-            eval_true = self.evaluate_leader(env, true_f_pol_eval, n_episodes=10, return_trajectories=True)  # ログも出す
+            eval_true = self.evaluate_leader(env, true_f_pol_eval, n_episodes=10, return_trajectories=True)
             traj = eval_true["trajectories"][0]
             print("--- Sample Trajectory ---")
             for t in range(len(traj["observations"])):

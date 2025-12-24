@@ -2,14 +2,11 @@
 
 import argparse
 import pickle
-from pathlib import Path
 
 import numpy as np
 from blackrl.algos import BilevelRL
 from blackrl.envs import DiscreteToyEnvPaper
 from plot_learning_curves import plot_learning_curves
-
-DEFAULT_OUTPUT_DIR = Path("data/internal/ex")
 
 COMMON_PARAMS = {
     "discount_leader": 0.99,
@@ -20,11 +17,11 @@ COMMON_PARAMS = {
     "mdce_irl_config": {
         "max_iterations": 10,
         "tolerance": 1,
-        "n_soft_q_iterations": 300,
+        "n_soft_q_iterations": 1000,
     },
     "soft_q_config": {
         "learning_rate": 0.1,
-        "temperature": 0.05,
+        "temperature": 0.005,
         "optimistic_init": 0,
     },
 }
@@ -37,14 +34,8 @@ TRAIN_PARAMS = {
 }
 
 
-# === 共通のヘルパー関数 (変更なし) ===
-def create_simple_leader_policy(env_spec):
-    def leader_policy(observation, deterministic=False):
-        if deterministic:
-            return 0
-        return int(np.random.choice([0, 1], p=[0.5, 0.5]))
-
-    return leader_policy
+def create_simple_leader_policy():
+    return np.random.choice([0, 1], p=[0.5, 0.5])
 
 
 def feature_fn(state, leader_action, follower_action):
@@ -59,13 +50,8 @@ def feature_fn(state, leader_action, follower_action):
     return feature
 
 
-def run_experiment(mode, output_dir=None):
+def run_experiment(mode, output_dir):
     """指定されたモードの実験を1つだけ実行して保存する"""
-    if output_dir is None:
-        output_dir = DEFAULT_OUTPUT_DIR
-    else:
-        output_dir = Path(output_dir)
-
     print(f"\n=== Starting Experiment: {mode} ===")
 
     env = DiscreteToyEnvPaper()
@@ -73,7 +59,7 @@ def run_experiment(mode, output_dir=None):
     # アルゴリズム初期化
     algo = BilevelRL(
         env_spec=env.spec,
-        leader_policy=create_simple_leader_policy(env.spec),
+        leader_policy=create_simple_leader_policy(),
         feature_fn=feature_fn,
         **COMMON_PARAMS,
     )
@@ -93,13 +79,8 @@ def run_experiment(mode, output_dir=None):
     print(f"=== Finished {mode}. Saved to {save_path} ===")
 
 
-def merge_and_plot(output_dir=None):
+def merge_and_plot(output_dir):
     """保存された結果を読み込んでプロットする"""
-    if output_dir is None:
-        output_dir = DEFAULT_OUTPUT_DIR
-    else:
-        output_dir = Path(output_dir)
-
     print(f"\n=== Merging Results and Plotting (from {output_dir}) ===")
     results = {}
 
@@ -129,7 +110,7 @@ def merge_and_plot(output_dir=None):
     main_stats = results.get("Proposed (IRL)", {})
     baselines = {k: v for k, v in results.items() if k != "Proposed (IRL)"}
 
-    save_path = output_dir / "comparison_curves.png"
+    save_path = output_dir / "comparison_curves.pdf"
     plot_learning_curves(main_stats, save_path=save_path, baselines=baselines)
     print(f"Plot saved to: {save_path}")
 
