@@ -1,8 +1,4 @@
-"""Maximum Discounted Causal Entropy Inverse Reinforcement Learning (MDCE IRL).
-
-This module implements MDCE IRL for recovering follower's reward parameters
-from observed trajectory data.
-"""
+"""Maximum Discounted Causal Entropy Inverse Reinforcement Learning (MDCE IRL)."""
 
 from collections.abc import Callable
 
@@ -11,26 +7,6 @@ import torch
 
 
 class MDCEIRL:
-    """MDCE IRL for recovering follower's reward parameters.
-
-    MDCE IRL solves the following optimization problem:
-        max_g H^γ(g)  subject to  φ̄_g^γ = φ̄_expert^γ
-
-    The dual problem is:
-        max_w L(w; D) = E_τ~D [Σ_t γ^t log g_w(b_t|s_t, a_t)]
-
-    where g_w is the Soft Bellman policy induced by reward r_F = w^T φ.
-
-    Args:
-        feature_fn: Feature mapping φ: (s, a, b) -> R^K
-        discount: Discount factor γ_F
-        learning_rate: Learning rate for gradient ascent
-        max_iterations: Maximum number of iterations
-        tolerance: Convergence tolerance
-        n_soft_q_iterations: Number of soft Q-learning iterations
-
-    """
-
     def __init__(
         self,
         feature_fn: Callable,
@@ -51,7 +27,6 @@ class MDCEIRL:
         self,
         trajectories: list[dict],
     ) -> torch.Tensor:
-        """Compute expert's discounted feature sum (Feature Counts)."""
         all_traj_fev = []
 
         for traj in trajectories:
@@ -63,10 +38,8 @@ class MDCEIRL:
                 continue
 
             traj_fev = None
-            # weight = 0.0  # <--- 【削除】
 
             for t in range(len(obs)):
-                # Extract state, leader action, follower action
                 s = obs[t]
                 a = leader_acts[t] if t < len(leader_acts) else None
                 b = follower_acts[t] if t < len(follower_acts) else None
@@ -220,12 +193,6 @@ class MDCEIRL:
         return total_likelihood / total_weight if total_weight > 0 else 0.0
 
     def get_reward_params(self) -> torch.Tensor:
-        """Get learned reward parameters.
-
-        Returns:
-            Reward parameter vector w
-
-        """
         if self.w is None:
             raise ValueError("Model has not been fitted yet. Call fit() first.")
         return self.w
