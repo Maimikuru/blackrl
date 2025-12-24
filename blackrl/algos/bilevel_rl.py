@@ -238,16 +238,16 @@ class BilevelRL:
         )
 
         # Initialize MDCE IRL
-        mdce_config = mdce_irl_config or {}
+        mdce_config = mdce_irl_config
         self.mdce_irl = MDCEIRL(
-            feature_fn=feature_fn or self._default_feature_fn,
+            feature_fn=feature_fn,
             discount=discount_follower,
             **mdce_config,
         )
 
         # Initialize Soft Q-Learning
         self.soft_q_learning: SoftQLearning | FollowerPolicyModel | None = None
-        self.soft_q_config = soft_q_config or {}
+        self.soft_q_config = soft_q_config
 
         # === [追加] 真のフォロワーモデルを保持する変数を初期化 ===
         self.true_follower_model = None
@@ -268,9 +268,6 @@ class BilevelRL:
     def _log_leader_state(self, iteration):
         """Log Leader's Q-values and Policy probabilities."""
         print(f"\n--- Leader State at Iteration {iteration} ---")
-
-        if self.leader_q_table is None:
-            return
 
         num_states = self.leader_q_table.shape[0]
         num_leader_actions = self.leader_q_table.shape[1]
@@ -295,36 +292,6 @@ class BilevelRL:
 
                 print(f"  Action a={a}: E[Q]={expected_q:.4f} | Details: [{q_str}]")
         print("-" * 60)
-
-    def _default_feature_fn(self, state, leader_action, follower_action):
-        """Default feature function (identity).
-
-        Args:
-            state: State
-            leader_action: Leader action
-            follower_action: Follower action
-
-        Returns:
-            Feature vector
-
-        """
-        # Concatenate state, leader_action, follower_action
-        if isinstance(state, np.ndarray):
-            state_flat = state.flatten()
-        else:
-            state_flat = np.array([state])
-
-        if isinstance(leader_action, np.ndarray):
-            leader_flat = leader_action.flatten()
-        else:
-            leader_flat = np.array([leader_action])
-
-        if isinstance(follower_action, np.ndarray):
-            follower_flat = follower_action.flatten()
-        else:
-            follower_flat = np.array([follower_action])
-
-        return np.concatenate([state_flat, leader_flat, follower_flat])
 
     def _initialize_leader_q_table(self, env):
         """Initialize leader's Q-table Q_L[s, a, b].
