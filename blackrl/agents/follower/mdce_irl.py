@@ -8,7 +8,6 @@ from collections.abc import Callable
 
 import numpy as np
 import torch
-from joblib import Parallel, delayed
 
 
 class MDCEIRL:
@@ -29,8 +28,6 @@ class MDCEIRL:
         max_iterations: Maximum number of iterations
         tolerance: Convergence tolerance
         n_soft_q_iterations: Number of soft Q-learning iterations
-        n_monte_carlo_samples: Number of Monte Carlo samples
-        n_jobs: Number of parallel jobs for Monte Carlo sampling (-1 for all CPUs)
 
     """
 
@@ -41,16 +38,12 @@ class MDCEIRL:
         max_iterations: int = 1000,
         tolerance: float = 0.025,
         n_soft_q_iterations: int = 100,
-        n_monte_carlo_samples: int = 1000,
-        n_jobs: int = -1,
     ):
         self.feature_fn = feature_fn
         self.discount = discount
         self.max_iterations = max_iterations
         self.tolerance = tolerance
         self.n_soft_q_iterations = n_soft_q_iterations
-        self.n_monte_carlo_samples = n_monte_carlo_samples
-        self.n_jobs = n_jobs
         # Reward parameter (to be learned)
         self.w: torch.Tensor | None = None
 
@@ -58,22 +51,7 @@ class MDCEIRL:
         self,
         trajectories: list[dict],
     ) -> torch.Tensor:
-        """Compute expert's discounted feature expectation value (FEV).
-
-        φ̄_expert^γ = E_τ~D [Σ_t γ^t φ(s_t, a_t, b_t)]
-
-        Args:
-            trajectories: List of expert trajectories, each containing:
-                - observations: List of states
-                - leader_actions: List of leader actions
-                - follower_actions: List of follower actions
-
-        Returns:
-            Expert FEV vector of shape (K,)
-
-        """
-        # CRITICAL FIX: Use same computation method as Policy FEV
-        # Compute trajectory-wise normalized FEV, then take mean (same as compute_policy_fev)
+        """Compute expert's discounted feature sum (Feature Counts)."""
         all_traj_fev = []
 
         for traj in trajectories:
@@ -84,9 +62,8 @@ class MDCEIRL:
             if len(obs) == 0:
                 continue
 
-            # Compute discounted feature sum for this trajectory
             traj_fev = None
-            weight = 0.0
+            # weight = 0.0  # <--- 【削除】
 
             for t in range(len(obs)):
                 # Extract state, leader action, follower action
@@ -112,18 +89,15 @@ class MDCEIRL:
                 else:
                     traj_fev = traj_fev + discounted_phi
 
-                weight += self.discount**t
+            if traj_fev is not None:
+                all_traj_fev.append(traj_fev)
 
-            # Normalize each trajectory individually (same as compute_policy_fev)
-            if traj_fev is not None and weight > 0:
-                normalized_traj_fev = traj_fev / weight
-                all_traj_fev.append(normalized_traj_fev)
-
-        # Take mean of normalized trajectory FEVs (same as compute_policy_fev)
+        # (平均をとる処理はそのまま)
         if len(all_traj_fev) > 0:
             fev = torch.mean(torch.stack(all_traj_fev), dim=0)
         else:
-            fev = torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
+            dim = self.feature_fn(0, 0, 0).shape[0] if hasattr(self.feature_fn, "dim") else 18  # 18は適当なデフォルト値
+            fev = torch.zeros(dim)
 
         return fev
 
@@ -197,53 +171,6 @@ class MDCEIRL:
                 break
 
         return traj_fev, weight
-
-    def compute_policy_fev(
-        self,
-        policy: Callable,
-        leader_policy: Callable,
-        env,
-        n_jobs: int | None = None,
-    ) -> torch.Tensor:
-        """Compute policy's discounted feature expectation value (FEV).
-
-        φ̄_g^γ = E^{f_θ_L, g} [Σ_t γ^t φ(s_t, a_t, b_t)]
-
-        Args:
-            policy: Follower policy g(b|s, a)
-            leader_policy: Leader policy f_θ_L(a|s)
-            env: Environment instance
-            n_jobs: Number of parallel jobs (-1 for all CPUs, 1 for sequential, None uses self.n_jobs)
-
-        Returns:
-            Policy FEV vector of shape (K,)
-
-        """
-        if n_jobs is None:
-            n_jobs = self.n_jobs
-
-        # Parallel sampling of trajectories
-        results = Parallel(n_jobs=n_jobs, backend="loky")(
-            delayed(self._sample_trajectory_fev)(policy, leader_policy, env) for _ in range(self.n_monte_carlo_samples)
-        )
-
-        # CRITICAL FIX: Use same computation method as Expert FEV
-        # Normalize each trajectory individually, then take mean (same as compute_expert_fev)
-        all_traj_fev = []
-
-        for traj_fev, weight in results:
-            if traj_fev is not None and weight > 0:
-                # Normalize each trajectory individually (same as compute_expert_fev)
-                normalized_traj_fev = traj_fev / weight
-                all_traj_fev.append(normalized_traj_fev)
-
-        # Take mean of normalized trajectory FEVs (same as compute_expert_fev)
-        if len(all_traj_fev) > 0:
-            fev = torch.mean(torch.stack(all_traj_fev), dim=0)
-        else:
-            fev = torch.zeros(self.feature_fn.dim if hasattr(self.feature_fn, "dim") else 1)
-
-        return fev
 
     def compute_likelihood(
         self,

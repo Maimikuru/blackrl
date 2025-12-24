@@ -5,11 +5,36 @@ import pickle
 from pathlib import Path
 
 import numpy as np
-
-# 既存のインポート
 from blackrl.algos import BilevelRL
 from blackrl.envs import DiscreteToyEnvPaper
 from plot_learning_curves import plot_learning_curves
+
+DEFAULT_OUTPUT_DIR = Path("data/internal/ex")
+
+COMMON_PARAMS = {
+    "discount_leader": 0.99,
+    "discount_follower": 0.99,
+    "learning_rate_leader_actor": 1e-4,
+    "learning_rate_leader_critic": 1e-3,
+    "learning_rate_follower": 0.01,
+    "mdce_irl_config": {
+        "max_iterations": 10,
+        "tolerance": 1,
+        "n_soft_q_iterations": 300,
+    },
+    "soft_q_config": {
+        "learning_rate": 0.1,
+        "temperature": 0.05,
+        "optimistic_init": 0,
+    },
+}
+
+TRAIN_PARAMS = {
+    "n_leader_iterations": 1000,
+    "n_episodes_per_iteration": 1000,
+    "mdce_irl_frequency": 10,
+    "verbose": True,
+}
 
 
 # === 共通のヘルパー関数 (変更なし) ===
@@ -23,10 +48,7 @@ def create_simple_leader_policy(env_spec):
 
 
 def feature_fn(state, leader_action, follower_action):
-    # (省略: 前回の18次元特徴量のコードをそのまま使う)
-    num_states = 3
-    num_leader_actions = 2
-    num_follower_actions = 3
+    num_states, num_leader_actions, num_follower_actions = 3, 2, 3
     total_dim = num_states * num_leader_actions * num_follower_actions
     s = int(state.item() if hasattr(state, "item") else state)
     a = int(leader_action.item() if hasattr(leader_action, "item") else leader_action)
@@ -35,38 +57,6 @@ def feature_fn(state, leader_action, follower_action):
     feature = np.zeros(total_dim, dtype=np.float32)
     feature[index] = 1.0
     return feature
-
-
-# === 設定 (共通) ===
-COMMON_PARAMS = {
-    "discount_leader": 0.99,
-    "discount_follower": 0.99,
-    "learning_rate_leader_actor": 1e-4,  # 修正済みの学習率
-    "learning_rate_leader_critic": 1e-3,
-    "learning_rate_follower": 0.01,
-    "mdce_irl_config": {
-        "max_iterations": 1000,
-        "tolerance": 0.01,
-        "n_soft_q_iterations": 1000,
-        "n_monte_carlo_samples": 5000,  # SFを使うなら無視されますが念のため
-        "n_jobs": -1,
-    },
-    "soft_q_config": {
-        "learning_rate": 0.1,
-        "temperature": 1.0,
-        "optimistic_init": 0,
-    },
-}
-
-TRAIN_PARAMS = {
-    "n_leader_iterations": 1000,  # 本番用
-    "n_follower_iterations": 500,
-    "n_episodes_per_iteration": 1000,
-    "mdce_irl_frequency": 10,  # 必要に応じて調整
-    "verbose": True,
-}
-
-DEFAULT_OUTPUT_DIR = Path("data/internal/ex")
 
 
 def run_experiment(mode, output_dir=None):
@@ -89,8 +79,6 @@ def run_experiment(mode, output_dir=None):
     )
 
     # 学習実行
-    # mode が "irl" のときは oracle_mode="none" を渡す
-    # mode が "irl_no_second_term" のときは第2項を計算しない
     oracle_arg = "none" if mode == "irl" or mode == "irl_no_second_term" else mode
     use_second_term = mode != "irl_no_second_term"
 
