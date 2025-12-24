@@ -223,11 +223,8 @@ class BilevelRL:
         # Initialize Leader Policy
         if leader_policy is None:
 
-            def default_leader_policy(observation, deterministic=False):
-                """Default uniform leader policy for initial exploration."""
+            def default_leader_policy():
                 num_actions = env_spec.leader_action_space.n if hasattr(env_spec.leader_action_space, "n") else 2
-                if deterministic:
-                    return 0
                 return int(np.random.choice(num_actions))
 
             leader_policy = default_leader_policy
@@ -369,9 +366,9 @@ class BilevelRL:
         self._use_tabular_policy = True
 
         # Update leader_policy to use tabular policy
-        def tabular_leader_policy(observation, deterministic=False):
+        def tabular_leader_policy(observation):
             """Tabular leader policy wrapper."""
-            return self.leader_policy_obj.sample_action(observation, deterministic)
+            return self.leader_policy_obj.sample_action(observation)
 
         self.leader_policy = tabular_leader_policy
 
@@ -1120,7 +1117,7 @@ class BilevelRL:
 
             while True:
                 # Sample leader action
-                leader_act = self.leader_policy_obj.sample_action(obs, deterministic=False)
+                leader_act = self.leader_policy_obj.sample_action(obs)
 
                 # Sample follower action (exploration)
                 follower_act = self.soft_q_learning.sample_action(obs, leader_act)
@@ -1149,8 +1146,8 @@ class BilevelRL:
                 print(f"Soft Q-Learning iteration {iteration}: reward={total_reward:.4f}")
 
         # Create follower policy from learned Q-function
-        # Always sample from Max-Ent policy (deterministic=False is not used for Max-Ent RL)
-        def follower_policy_fn(obs, leader_act, deterministic=False):
+        # Always sample from Max-Ent policy
+        def follower_policy_fn(obs, leader_act):
             # Max-Ent RL always uses stochastic policy
             return self.soft_q_learning.sample_action(obs, leader_act)
 
@@ -1184,8 +1181,7 @@ class BilevelRL:
             }
 
             while True:
-                # 行動決定（評価なので決定論的が良い場合は deterministic=True に変更可）
-                leader_act, follower_act = self.get_joint_action(obs, deterministic=False)
+                leader_act, follower_act = self.get_joint_action(obs)
 
                 env_step = env.step(leader_act, follower_act)
                 leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
@@ -1221,13 +1217,11 @@ class BilevelRL:
     def get_joint_action(
         self,
         observation: np.ndarray,
-        deterministic: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Get joint action from joint policy.
 
         Args:
             observation: Current observation
-            deterministic: Whether to use deterministic policies
 
         Returns:
             Tuple of (leader_action, follower_action)
@@ -1237,7 +1231,8 @@ class BilevelRL:
             raise ValueError("Follower policy not derived. Call derive_follower_policy() first.")
 
         # Get leader action
-        leader_act = self.leader_policy_obj.sample_action(observation, deterministic=deterministic)
+
+        leader_act = self.leader_policy_obj.sample_action(observation)
 
         # Convert to numpy arrays for get_inputs_for
         obs_array = np.array([observation]) if not isinstance(observation, np.ndarray) else np.array([observation])
@@ -1259,7 +1254,6 @@ class BilevelRL:
         follower_act = self.follower_policy(
             follower_obs_np,
             leader_act,
-            deterministic=deterministic,
         )
 
         return leader_act, follower_act
@@ -1644,7 +1638,7 @@ class BilevelRL:
 
                 # 方策関数を作成
                 # Max-Ent RL always uses stochastic policy
-                def follower_policy_fn(obs, leader_act, deterministic=False):
+                def follower_policy_fn(obs, leader_act):
                     return self.soft_q_learning.sample_action(obs, leader_act)
 
                 self.follower_policy = follower_policy_fn
@@ -1684,7 +1678,7 @@ class BilevelRL:
                     )
 
                     # 方策関数
-                    def follower_policy_fn(obs, leader_act, deterministic=False):
+                    def follower_policy_fn(obs, leader_act):
                         return self.soft_q_learning.sample_action(obs, leader_act)
 
                     self.follower_policy = follower_policy_fn
@@ -1919,8 +1913,7 @@ class BilevelRL:
                 self._log_leader_state(iteration)
 
             # 正解フォロワー（その反復の最適反応）を用いてリーダーを評価
-            # 確率的方策(deterministic=False)で評価するのが一般的
-            def true_f_pol_eval(obs, leader_act, deterministic=False):
+            def true_f_pol_eval(obs, leader_act):
                 return self.true_follower_model.sample_action(obs, leader_act)
 
             eval_true = self.evaluate_leader(env, true_f_pol_eval, n_episodes=10, return_trajectories=True)  # ログも出す
