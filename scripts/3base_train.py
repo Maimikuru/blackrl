@@ -75,7 +75,6 @@ def main():
         "soft_q_config": {
             "learning_rate": 0.1,
             "temperature": 1.0,
-            "optimistic_init": 0,
         },
     }
 

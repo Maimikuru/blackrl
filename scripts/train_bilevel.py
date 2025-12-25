@@ -79,7 +79,6 @@ def main():
         soft_q_config={
             "learning_rate": 0.1,  # REDUCED: 0.2 caused rapid descent from optimistic init
             "temperature": 1.0,  # Keep original problem definition (but may need to increase for better exploration)
-            "optimistic_init": 0,  # Optimistic initialization (lowered from 130 for faster convergence)
         },
     )
 

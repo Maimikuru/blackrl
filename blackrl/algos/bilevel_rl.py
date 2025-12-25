@@ -84,7 +84,6 @@ def _collect_single_episode(
     env_init_kwargs,
     leader_policy_table,
     follower_q_values,
-    env_spec_dict,
     num_follower_actions,
     temperature,
 ):
@@ -750,7 +749,6 @@ class BilevelRL:
                         env_init_kwargs,
                         leader_policy_table,
                         current_follower_q,
-                        {},
                         n_fa,
                         self.temperature,
                     )
@@ -944,7 +942,6 @@ class BilevelRL:
                     env_init_kwargs,
                     leader_policy_table,
                     expert_q_values,  # ★ExpertのQ値を使う
-                    {},
                     n_fa,
                     self.temperature,
                 )
@@ -1127,25 +1124,50 @@ class BilevelRL:
                 leader_reward = env_step.env_info.get("leader_reward", env_step.reward)
                 # === デバッグ用ログ追加 ===
                 # フォロワーが確率的方策モデルを持っている場合、その確率分布を表示
+                # === デバッグ用ログ追加 (修正版) ===
                 if hasattr(self, "true_follower_model") and self.true_follower_model is not None:
-                    # 現在の状態・リーダー行動に対するフォロワーの確率を取得
-                    # ※ follower_policy_fn が true_f_pol_eval である前提
+                    # 1. 行動選択時と同じ「フォロワー用観測」を取得する
+                    #    (get_joint_action 内のロジックを再現、または変数として取得しておくのがベスト)
+                    if isinstance(obs, np.ndarray):
+                        obs_array = np.array([obs], dtype=np.int32)
+                    else:
+                        obs_array = np.array([int(obs)], dtype=np.int32)
 
-                    # 観測値をnumpy等からキー変換等の処理が必要なら適宜行う
-                    debug_probs = self.true_follower_model.get_policy(obs, leader_act)
+                    if isinstance(leader_act, np.ndarray):
+                        leader_act_array = np.array([leader_act], dtype=np.int32)
+                    else:
+                        leader_act_array = np.array([int(leader_act)], dtype=np.int32)
 
-                    # 確率が高い順にソートして表示
+                    # デバッグ用：元のobsを直接使う（get_inputs_forは結合されたベクトルを返すため）
+                    # true_f_pol_evalと同じロジックでobsを変換
+                    if isinstance(obs, np.ndarray):
+                        flat = obs.flatten()
+                        if flat.size == 1:
+                            s_val = int(flat[0])
+                        else:
+                            s_val = int(np.argmax(flat))
+                    else:
+                        s_val = int(obs)
+
+                    # leader_actも同様に確実にint化
+                    if isinstance(leader_act, np.ndarray):
+                        flat = leader_act.flatten()
+                        l_val = int(flat[0]) if flat.size == 1 else int(np.argmax(flat))
+                    else:
+                        l_val = int(leader_act)
+
+                    # 3. 整合性の取れた状態で確率を取得
+                    debug_probs = self.true_follower_model.get_policy(s_val, l_val)
+
+                    # 表示
                     probs_str = ", ".join([f"b{b}: {p:.4f}" for b, p in debug_probs.items()])
-
-                    # 現在のQ値も表示するとさらに分かりやすい
                     q_vals_str = ", ".join(
-                        [
-                            f"Q(b{b})={self.true_follower_model.get_q_value(obs, leader_act, b):.2f}"
-                            for b in debug_probs.keys()
-                        ],
+                        [f"Q(b{b})={self.true_follower_model.get_q_value(s_val, l_val, b):.2f}" for b in debug_probs.keys()],
                     )
 
-                    print(f"  [Debug] S={obs}, L_Act={leader_act} -> Probs=[{probs_str}], Qs=[{q_vals_str}]")
+                    print(f"  [Debug] S(raw)={obs}, S(key)={s_val}, L_Act={l_val}")
+                    print(f"          Probs=[{probs_str}]")
+                    print(f"          Qs   =[{q_vals_str}]")
                     print(f"          Selected F_Act={follower_act}")
                 # ==========================
 
@@ -1197,26 +1219,23 @@ class BilevelRL:
 
         leader_act = self.leader_policy_obj.sample_action(observation)
 
-        # Convert to numpy arrays for get_inputs_for
-        obs_array = np.array([observation]) if not isinstance(observation, np.ndarray) else np.array([observation])
-        leader_act_array = np.array([leader_act]) if not isinstance(leader_act, np.ndarray) else np.array([leader_act])
-
         # Get follower action
-        follower_obs = self.env_spec.get_inputs_for(
-            "follower",
-            "policy",
-            obs=obs_array,
-            leader_act=leader_act_array,
-        )
-
-        if isinstance(follower_obs, torch.Tensor):
-            follower_obs_np = follower_obs[0].cpu().numpy()
+        # Note: follower_policy expects (obs, leader_act) as separate arguments,
+        # not the concatenated vector from get_inputs_for
+        # So we pass the original obs and leader_act directly
+        if isinstance(observation, np.ndarray):
+            obs_for_follower = observation.astype(np.int32) if observation.dtype != np.int32 else observation
         else:
-            follower_obs_np = follower_obs[0] if isinstance(follower_obs, list) else follower_obs
+            obs_for_follower = np.array(int(observation), dtype=np.int32)
+
+        if isinstance(leader_act, np.ndarray):
+            leader_act_for_follower = leader_act.astype(np.int32) if leader_act.dtype != np.int32 else leader_act
+        else:
+            leader_act_for_follower = np.array(int(leader_act), dtype=np.int32)
 
         follower_act = self.follower_policy(
-            follower_obs_np,
-            leader_act,
+            obs_for_follower,
+            leader_act_for_follower,
         )
 
         return leader_act, follower_act
@@ -1746,7 +1765,6 @@ class BilevelRL:
                         env_init_kwargs,
                         leader_policy_table,
                         follower_q_values,
-                        {},
                         n_fa,
                         self.temperature,
                     )
@@ -1883,32 +1901,35 @@ class BilevelRL:
                 if hasattr(obs, "cpu"):
                     obs = obs.cpu().numpy()
 
-                # 2. 配列の場合の処理
+                # 2. 状態の整数化 (確実な変換)
                 obs_val = 0
                 if isinstance(obs, np.ndarray):
-                    if obs.size == 1:
-                        # サイズ1の配列 (例: array([2])) -> スカラを取り出す
-                        obs_val = int(obs.item())
+                    # flattenして確認
+                    flat = obs.flatten()
+                    if flat.size == 1:
+                        # スカラ配列 (例: array([2]))
+                        obs_val = int(flat[0])
                     else:
-                        # サイズが1より大きい (例: one-hot [0, 0, 1]) -> インデックスに戻す
-                        obs_val = int(np.argmax(obs))
+                        # ベクトル (例: one-hot [0, 0, 1] -> 2, または [0.1, 0.9] -> 1)
+                        # one-hot環境なら argmax を使うのが一般的
+                        obs_val = int(np.argmax(flat))
                 else:
-                    # 既にint/floatの場合
+                    # int/floatの場合
                     obs_val = int(obs)
 
-                # 3. leader_act も同様に念のため処理
+                # 3. leader_act も同様に確実に処理
                 if hasattr(leader_act, "cpu"):
                     leader_act = leader_act.cpu().numpy()
 
                 leader_act_val = 0
                 if isinstance(leader_act, np.ndarray):
-                    if leader_act.size == 1:
-                        leader_act_val = int(leader_act.item())
+                    flat = leader_act.flatten()
+                    if flat.size == 1:
+                        leader_act_val = int(flat[0])
                     else:
-                        leader_act_val = int(np.argmax(leader_act))
+                        leader_act_val = int(np.argmax(flat))
                 else:
                     leader_act_val = int(leader_act)
-                # ---------------------------------------------------
 
                 # 整数化した値でモデルを呼び出す
                 return self.true_follower_model.sample_action(obs_val, leader_act_val)

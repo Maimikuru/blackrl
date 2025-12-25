@@ -41,7 +41,6 @@ class SoftQLearning:
         learning_rate: float = 1e-3,
         temperature: float = 1.0,
         device: torch.device | None = None,
-        optimistic_init: float = 0.0,  # Optimistic initialization value
     ):
         self.env_spec = env_spec
         self.reward_fn = reward_fn  # Optional: only used if computing rewards internally
@@ -50,7 +49,6 @@ class SoftQLearning:
         self.learning_rate = learning_rate
         self.temperature = temperature
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.optimistic_init = optimistic_init
 
         # Q-function network (can be replaced with tabular or neural network)
         self.Q: dict | None = None
@@ -63,22 +61,16 @@ class SoftQLearning:
         - Tabular Q-function for discrete state/action spaces
         - Neural network for continuous/large state spaces
 
-        Uses optimistic initialization: Q(s,a,b) = optimistic_init
         This encourages exploration of all state-action pairs.
         """
         # For discrete spaces, use dictionary with optimistic initialization
         # For continuous spaces, use neural network
-        if self.optimistic_init != 0.0:
-            # Optimistic initialization: default to high value
-            self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: self.optimistic_init)))
-        else:
-            # Standard initialization: default to 0
-            self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+        self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
 
     def compute_soft_value(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> float:
         """Compute soft value function V_F^soft(s, a).
 
@@ -109,9 +101,9 @@ class SoftQLearning:
 
     def get_q_value(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
-        follower_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
+        follower_action: np.ndarray | float,
     ) -> float:
         """Get Q-value Q_F^soft(s, a, b).
 
@@ -133,9 +125,9 @@ class SoftQLearning:
 
     def set_q_value(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
-        follower_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
+        follower_action: np.ndarray | float,
         value: float,
     ):
         """Set Q-value Q_F^soft(s, a, b).
@@ -153,22 +145,50 @@ class SoftQLearning:
 
         self.Q[state_key][leader_key][follower_key] = value
 
-    def _state_to_key(self, state: np.ndarray) -> tuple:
+    def _state_to_key(self, state: np.ndarray | float) -> tuple:
         """Convert state to hashable key."""
+        # numpy配列の場合
         if isinstance(state, np.ndarray):
-            return tuple(state.flatten())
-        # Handle scalar values (int, float, etc.)
-        if isinstance(state, (int, float, np.integer, np.floating)):
-            return (state,)
+            flat = state.flatten()
+            # 要素が1つなら、値を取り出してスカラとして処理（intキャスト試行）
+            if flat.size == 1:
+                val = flat.item()
+                if isinstance(val, (float, np.floating)):
+                    # もし値が整数に近いなら整数に丸める（離散環境の場合）
+                    return (int(val),)
+                return (val,)
+            return tuple(flat)
+
+        # スカラの場合
+        if isinstance(state, (float, np.floating)):
+            return (int(state),)  # 強制的にintにする（離散状態IDの場合）
+
+        if isinstance(state, (int, np.integer)):
+            return (int(state),)
+
         return tuple(state)
 
-    def _action_to_key(self, action: np.ndarray) -> tuple:
+    def _action_to_key(self, action: np.ndarray | float) -> tuple:
         """Convert action to hashable key."""
+        # numpy配列の場合
         if isinstance(action, np.ndarray):
-            return tuple(action.flatten())
-        # Handle scalar values (int, float, etc.)
-        if isinstance(action, (int, float, np.integer, np.floating)):
-            return (action,)
+            flat = action.flatten()
+            # 要素が1つなら、値を取り出してスカラとして処理（intキャスト試行）
+            if flat.size == 1:
+                val = flat.item()
+                if isinstance(val, (float, np.floating)):
+                    # もし値が整数に近いなら整数に丸める（離散環境の場合）
+                    return (int(val),)
+                return (val,)
+            return tuple(flat)
+
+        # スカラの場合
+        if isinstance(action, (float, np.floating)):
+            return (int(action),)  # 強制的にintにする（離散アクションIDの場合）
+
+        if isinstance(action, (int, np.integer)):
+            return (int(action),)
+
         return tuple(action)
 
     def _get_follower_actions(self):
@@ -191,11 +211,11 @@ class SoftQLearning:
 
     def update(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
-        follower_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
+        follower_action: np.ndarray | float,
         reward: float,
-        next_state: np.ndarray,
+        next_state: np.ndarray | float,
         done: bool,
         learning_rate: float | None = None,
     ):
@@ -225,23 +245,17 @@ class SoftQLearning:
             target_q = reward
         else:
             expected_soft_value = 0.0
-            try:
-                # リーダーの行動確率分布 [p(a=0), p(a=1)] を取得
-                leader_action_probs = self.leader_policy(next_state)
-            except Exception:
-                leader_action_probs = [0.5, 0.5]  # (フォールバック)
+            leader_action_probs = self.leader_policy(next_state)
 
-            # リーダーの全行動 (0 と 1) についてループ
-            leader_actions = [0, 1]  # DiscreteToyEnv の場合
+            num_leader_actions = self.env_spec.leader_policy_env_spec.action_space.n
 
-            for i, next_leader_act in enumerate(leader_actions):
+            for i, next_leader_act in enumerate(range(num_leader_actions)):
                 if i < len(leader_action_probs):
                     # V_F^soft(s', a') を計算
                     soft_value = self.compute_soft_value(next_state, next_leader_act)
 
                     # 期待値に加算: p(a'|s') * V(s', a')
                     expected_soft_value += leader_action_probs[i] * soft_value
-            # --- 修正ここまで ---
 
             target_q = reward + self.discount * expected_soft_value
 
@@ -251,8 +265,8 @@ class SoftQLearning:
 
     def get_policy(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> dict:
         """Get optimal Max-Ent policy g^*(b|s, a).
 
@@ -271,14 +285,14 @@ class SoftQLearning:
 
         # Compute probabilities for all follower actions
         follower_actions = self._get_follower_actions()
-        log_probs = []
         probs = {}
 
         for b in follower_actions:
             q_val = self.get_q_value(state, leader_action, b)
             log_prob = (q_val - soft_value) / self.temperature
-            log_probs.append(log_prob)
-            probs[tuple(b) if isinstance(b, np.ndarray) else b] = np.exp(log_prob)
+            # キーを整数に統一（離散アクションの場合）
+            action_key = int(b) if isinstance(b, (int, np.integer)) else b
+            probs[action_key] = np.exp(log_prob)
 
         # Normalize probabilities
         total_prob = sum(probs.values())
@@ -290,8 +304,8 @@ class SoftQLearning:
 
     def sample_action(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> np.ndarray:
         """Sample action from optimal Max-Ent policy.
 
@@ -311,7 +325,7 @@ class SoftQLearning:
         sampled_idx = np.random.choice(len(actions), p=probs)
         sampled_action = actions[sampled_idx]
 
-        # Convert back to numpy array if needed
+        # 常にnumpy配列として返す（型を統一）
         if isinstance(sampled_action, tuple):
-            return np.array(sampled_action)
-        return sampled_action
+            return np.array(sampled_action, dtype=np.int32)
+        return np.array(sampled_action, dtype=np.int32)
