@@ -1876,8 +1876,42 @@ class BilevelRL:
                 self._log_leader_state(iteration)
 
             # 正解フォロワー（その反復の最適反応）を用いてリーダーを評価
-            def true_f_pol_eval(obs, leader_act):
-                return self.true_follower_model.sample_action(obs, leader_act)
+            def true_f_pol_eval(obs, leader_act, deterministic=False):
+                # --- 修正: obs の型変換をあらゆるケースに対応させる ---
+
+                # 1. Tensorならnumpyへ
+                if hasattr(obs, "cpu"):
+                    obs = obs.cpu().numpy()
+
+                # 2. 配列の場合の処理
+                obs_val = 0
+                if isinstance(obs, np.ndarray):
+                    if obs.size == 1:
+                        # サイズ1の配列 (例: array([2])) -> スカラを取り出す
+                        obs_val = int(obs.item())
+                    else:
+                        # サイズが1より大きい (例: one-hot [0, 0, 1]) -> インデックスに戻す
+                        obs_val = int(np.argmax(obs))
+                else:
+                    # 既にint/floatの場合
+                    obs_val = int(obs)
+
+                # 3. leader_act も同様に念のため処理
+                if hasattr(leader_act, "cpu"):
+                    leader_act = leader_act.cpu().numpy()
+
+                leader_act_val = 0
+                if isinstance(leader_act, np.ndarray):
+                    if leader_act.size == 1:
+                        leader_act_val = int(leader_act.item())
+                    else:
+                        leader_act_val = int(np.argmax(leader_act))
+                else:
+                    leader_act_val = int(leader_act)
+                # ---------------------------------------------------
+
+                # 整数化した値でモデルを呼び出す
+                return self.true_follower_model.sample_action(obs_val, leader_act_val)
 
             eval_true = self.evaluate_leader(env, true_f_pol_eval, n_episodes=10, return_trajectories=True)
             traj = eval_true["trajectories"][0]

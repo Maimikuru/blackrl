@@ -62,9 +62,9 @@ class FollowerPolicyModel:
 
     def get_q_value(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
-        follower_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
+        follower_action: np.ndarray | float,
     ) -> float:
         """Get Q-value Q_F^soft(s, a, b).
 
@@ -86,8 +86,8 @@ class FollowerPolicyModel:
 
     def compute_soft_value(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> float:
         """Compute soft value function V_F^soft(s, a).
 
@@ -120,8 +120,8 @@ class FollowerPolicyModel:
 
     def get_policy(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> dict:
         """Get optimal Max-Ent policy g^*(b|s, a).
 
@@ -157,14 +157,14 @@ class FollowerPolicyModel:
 
     def sample_action(
         self,
-        state: np.ndarray,
-        leader_action: np.ndarray,
+        state: np.ndarray | float,
+        leader_action: np.ndarray | float,
     ) -> np.ndarray:
         """Sample action from optimal Max-Ent policy.
 
         Args:
-            state: State s
-            leader_action: Leader action a
+            state: State s (can be np.ndarray, int, or float)
+            leader_action: Leader action a (can be np.ndarray, int, or float)
 
         Returns:
             Sampled follower action b
@@ -179,20 +179,49 @@ class FollowerPolicyModel:
         sampled_action = int(np.random.choice(actions, p=probs))
         return np.array(sampled_action, dtype=np.int32)
 
-    def _state_to_key(self, state: np.ndarray) -> tuple:
+    def _state_to_key(self, state: np.ndarray | float) -> tuple:
         """Convert state to hashable key."""
+        # numpy配列の場合
         if isinstance(state, np.ndarray):
-            return tuple(state.flatten())
-        # Handle scalar values (int, float, etc.)
-        if isinstance(state, (int, float, np.integer, np.floating)):
-            return (state,)
+            flat = state.flatten()
+            # 要素が1つなら、値を取り出してスカラとして処理（intキャスト試行）
+            if flat.size == 1:
+                val = flat.item()
+                if isinstance(val, (float, np.floating)):
+                    # もし値が整数に近いなら整数に丸める（離散環境の場合）
+                    # または環境仕様に合わせて int(val) する
+                    return (int(val),)
+                return (val,)
+            return tuple(flat)
+
+        # スカラの場合
+        if isinstance(state, (float, np.floating)):
+            return (int(state),)  # 強制的にintにする（離散状態IDの場合）
+
+        if isinstance(state, (int, np.integer)):
+            return (int(state),)
+
         return tuple(state)
 
-    def _action_to_key(self, action: np.ndarray) -> tuple:
+    def _action_to_key(self, action: np.ndarray | float) -> tuple:
         """Convert action to hashable key."""
+        # numpy配列の場合
         if isinstance(action, np.ndarray):
-            return tuple(action.flatten())
-        # Handle scalar values (int, float, etc.)
-        if isinstance(action, (int, float, np.integer, np.floating)):
-            return (action,)
+            flat = action.flatten()
+            # 要素が1つなら、値を取り出してスカラとして処理（intキャスト試行）
+            if flat.size == 1:
+                val = flat.item()
+                if isinstance(val, (float, np.floating)):
+                    # もし値が整数に近いなら整数に丸める（離散環境の場合）
+                    return (int(val),)
+                return (val,)
+            return tuple(flat)
+
+        # スカラの場合
+        if isinstance(action, (float, np.floating)):
+            return (int(action),)  # 強制的にintにする（離散アクションIDの場合）
+
+        if isinstance(action, (int, np.integer)):
+            return (int(action),)
+
         return tuple(action)

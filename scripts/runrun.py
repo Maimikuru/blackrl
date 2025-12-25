@@ -2,6 +2,7 @@
 
 import argparse
 import pickle
+from pathlib import Path
 
 import numpy as np
 from blackrl.algos import BilevelRL
@@ -21,13 +22,13 @@ COMMON_PARAMS = {
     },
     "soft_q_config": {
         "learning_rate": 0.1,
-        "temperature": 0.005,
+        "temperature": 0.05,
         "optimistic_init": 0,
     },
 }
 
 TRAIN_PARAMS = {
-    "n_leader_iterations": 1000,
+    "n_leader_iterations": 10,
     "n_episodes_per_iteration": 1000,
     "mdce_irl_frequency": 10,
     "verbose": True,
@@ -71,6 +72,7 @@ def run_experiment(mode, output_dir):
     stats = algo.train(env=env, oracle_mode=oracle_arg, use_second_term=use_second_term, **TRAIN_PARAMS)
 
     # 結果保存
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     save_path = output_dir / f"stats_{mode}.pkl"
     with open(save_path, "wb") as f:
@@ -81,6 +83,7 @@ def run_experiment(mode, output_dir):
 
 def merge_and_plot(output_dir):
     """保存された結果を読み込んでプロットする"""
+    output_dir = Path(output_dir)
     print(f"\n=== Merging Results and Plotting (from {output_dir}) ===")
     results = {}
 
