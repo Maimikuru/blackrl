@@ -55,16 +55,7 @@ class SoftQLearning:
         self._initialize_q_function()
 
     def _initialize_q_function(self):
-        """Initialize Q-function.
-
-        This is a placeholder. In practice, you might use:
-        - Tabular Q-function for discrete state/action spaces
-        - Neural network for continuous/large state spaces
-
-        This encourages exploration of all state-action pairs.
-        """
-        # For discrete spaces, use dictionary with optimistic initialization
-        # For continuous spaces, use neural network
+        """Initialize Q-function."""
         self.Q = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
 
     def compute_soft_value(

@@ -1165,10 +1165,10 @@ class BilevelRL:
                         [f"Q(b{b})={self.true_follower_model.get_q_value(s_val, l_val, b):.2f}" for b in debug_probs.keys()],
                     )
 
-                    print(f"  [Debug] S(raw)={obs}, S(key)={s_val}, L_Act={l_val}")
-                    print(f"          Probs=[{probs_str}]")
-                    print(f"          Qs   =[{q_vals_str}]")
-                    print(f"          Selected F_Act={follower_act}")
+                    # print(f"  [Debug] S(raw)={obs}, S(key)={s_val}, L_Act={l_val}")
+                    # print(f"          Probs=[{probs_str}]")
+                    # print(f"          Qs   =[{q_vals_str}]")
+                    # print(f"          Selected F_Act={follower_act}")
                 # ==========================
 
                 # ログ保存
@@ -1584,6 +1584,54 @@ class BilevelRL:
         # Initialize replay buffer
         replay_buffer = GammaReplayBuffer(size=replay_buffer_size, gamma=self.discount_leader)
 
+        # ★修正: 最初のイテレーションの前に初期状態を評価
+        if verbose:
+            print("\n=== Initial Evaluation (Before Training) ===")
+
+        # 初期リーダー方策に対する最適フォロワーを計算
+        Q_optimal_initial = self._compute_softvi_q_values(
+            env,
+            max_iterations=2000,
+            tolerance=1e-10,
+            verbose=False,
+        )
+        self.true_follower_model = FollowerPolicyModel(self.env_spec, self.temperature)
+        self.true_follower_model.set_q_values(Q_optimal_initial)
+
+        def true_f_pol_eval_initial(obs, leader_act, deterministic=False):
+            if hasattr(obs, "cpu"):
+                obs = obs.cpu().numpy()
+            obs_val = 0
+            if isinstance(obs, np.ndarray):
+                flat = obs.flatten()
+                if flat.size == 1:
+                    obs_val = int(flat[0])
+                else:
+                    obs_val = int(np.argmax(flat))
+            else:
+                obs_val = int(obs)
+
+            if hasattr(leader_act, "cpu"):
+                leader_act = leader_act.cpu().numpy()
+            leader_act_val = 0
+            if isinstance(leader_act, np.ndarray):
+                flat = leader_act.flatten()
+                if flat.size == 1:
+                    leader_act_val = int(flat[0])
+                else:
+                    leader_act_val = int(np.argmax(flat))
+            else:
+                leader_act_val = int(leader_act)
+
+            return self.true_follower_model.sample_action(obs_val, leader_act_val)
+
+        eval_initial = self.evaluate_leader(env, true_f_pol_eval_initial, n_episodes=10, return_trajectories=True)
+        self.stats.setdefault("leader_return_true", []).append(eval_initial["mean"])
+        self.stats.setdefault("leader_return_true_std", []).append(eval_initial["std"])
+        self.stats.setdefault("leader_return", []).append(eval_initial["mean"])
+        if verbose:
+            print(f"Leader Performance (vs Best Response): {eval_initial['mean']:.4f} ± {eval_initial['std']:.4f}")
+
         # Main training loop
         for iteration in range(n_leader_iterations):
             if verbose:
@@ -1893,6 +1941,18 @@ class BilevelRL:
             if verbose:
                 self._log_leader_state(iteration)
 
+            # ★修正: 評価の直前に、更新後のリーダー方策に基づいてtrue_follower_modelを再計算
+            if verbose:
+                print("Recomputing Best Response (SoftVI) for updated leader policy...")
+            Q_optimal_updated = self._compute_softvi_q_values(
+                env,
+                max_iterations=2000,
+                tolerance=1e-10,
+                verbose=False,
+            )
+            self.true_follower_model = FollowerPolicyModel(self.env_spec, self.temperature)
+            self.true_follower_model.set_q_values(Q_optimal_updated)
+
             # 正解フォロワー（その反復の最適反応）を用いてリーダーを評価
             def true_f_pol_eval(obs, leader_act, deterministic=False):
                 # --- 修正: obs の型変換をあらゆるケースに対応させる ---
@@ -1935,14 +1995,14 @@ class BilevelRL:
                 return self.true_follower_model.sample_action(obs_val, leader_act_val)
 
             eval_true = self.evaluate_leader(env, true_f_pol_eval, n_episodes=10, return_trajectories=True)
-            traj = eval_true["trajectories"][0]
-            print("--- Sample Trajectory ---")
-            for t in range(len(traj["observations"])):
-                s = traj["observations"][t]
-                la = traj["leader_actions"][t]
-                fa = traj["follower_actions"][t]
-                lr = traj["leader_rewards"][t]
-                print(f"Step {t}: S={s}, L_Act={la}, F_Act={fa} -> L_Reward={lr}")
+            # traj = eval_true["trajectories"][0]
+            # print("--- Sample Trajectory ---")
+            # for t in range(len(traj["observations"])):
+            #     s = traj["observations"][t]
+            #     la = traj["leader_actions"][t]
+            #     fa = traj["follower_actions"][t]
+            #     lr = traj["leader_rewards"][t]
+            #     print(f"Step {t}: S={s}, L_Act={la}, F_Act={fa} -> L_Reward={lr}")
 
             # 統計記録
             self.stats.setdefault("leader_return_true", []).append(eval_true["mean"])

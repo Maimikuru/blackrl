@@ -12,7 +12,7 @@ echo "Starting Parallel Experiments..."
 echo "Working directory: $(pwd)"
 
 # ログディレクトリを作成
-LOG_DIR="data/internal/ex-all1000"
+LOG_DIR="data/internal/exp0.05"
 mkdir -p "$LOG_DIR"
 
 # 4つの実験をバックグラウンド (&) で並列実行
